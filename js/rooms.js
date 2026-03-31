@@ -206,10 +206,11 @@ function broadcastToRoom(rid, data) {
 }
 
 export function handlePeerLeaving(data) {
-  // Handled by mesh.js handlePeerDisconnect — this just cleans up room-level display
+  // Keep r.peers[data.id] intact — a graceful leave, like a disconnect,
+  // keeps the member visible in the sidebar with an offline dot.
   const r = state.rooms[data.roomId]; if (!r) return;
   const name = r.peers[data.id]?.name || data.id;
   addSystemMsg(data.roomId, 'general', `${name} left`);
-  delete r.peers[data.id];
+  saveStorage();
   if (data.roomId === state.activeRoomId) renderRoomSidebar();
 }

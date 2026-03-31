@@ -65,15 +65,26 @@ function priorityHigherThan(aDC, aId, bDC, bId) {
 }
 
 // ─── PARENT SCORE (for initial join) ─────────────────────────────────────────
+// Priority: shortest distance from root first (fan, not chain).
+// Among equal-distance nodes, prefer fewest children (most capacity).
+// Uses explicit childCount so parent/backup slots don't skew capacity math.
 function parentScore(entry) {
-  return -(entry.distance * 1000 + entry.connCount);
+  const children = entry.childCount ?? entry.connCount; // fall back for old map entries
+  return -(entry.distance * 10000 + children);
 }
 
 // ─── JOIN CLUSTER ─────────────────────────────────────────────────────────────
 export function findAndJoinParent(rid) {
   const r = state.rooms[rid]; if (!r) return;
+
+  // Eligible = has room for at least one more child (below SOFT_CHILD_LIMIT).
+  // childCount is explicit; fall back to connCount heuristic for older map entries.
   const candidates = Object.entries(r.clusterMap)
-    .filter(([pid, e]) => pid !== state.myId && e.connCount < SOFT_CHILD_LIMIT)
+    .filter(([pid, e]) => {
+      if (pid === state.myId) return false;
+      const children = e.childCount ?? Math.max(0, e.connCount - (e.distance === 0 ? 0 : 1));
+      return children < SOFT_CHILD_LIMIT;
+    })
     .sort(([, a], [, b]) => parentScore(b) - parentScore(a))
     .map(([pid]) => pid);
 
@@ -141,19 +152,36 @@ export function handleAdoptRequest(data, conn) {
     break;
   }
 
-  // Use hard limit during recovery, soft limit otherwise
+  // Use hard limit during recovery, soft limit (7) otherwise
   const limit = r.recoveryLock > Date.now() ? HARD_CHILD_LIMIT : SOFT_CHILD_LIMIT;
   if (r.childIds.length >= limit) {
-    conn.send({ type: 'adopt_redirect', roomId: rid, targetId: leastLoadedChild(rid) || null });
+    // Find the best available node in the whole cluster: closest to root,
+    // fewest children, with room to spare. This ensures BFS-style fan-out
+    // rather than bouncing the newcomer between random full nodes.
+    const available = Object.entries(r.clusterMap)
+      .filter(([pid, e]) => {
+        if (pid === state.myId || pid === conn.peer) return false;
+        const children = e.childCount ?? Math.max(0, e.connCount - (e.distance === 0 ? 0 : 1));
+        return children < SOFT_CHILD_LIMIT;
+      })
+      .sort(([, a], [, b]) => {
+        if (a.distance !== b.distance) return a.distance - b.distance;
+        const ac = a.childCount ?? a.connCount;
+        const bc = b.childCount ?? b.connCount;
+        return ac - bc;
+      });
+    const target = available[0]?.[0] ?? null;
+    conn.send({ type: 'adopt_redirect', roomId: rid, targetId: target });
     return;
   }
 
   addChild(rid, pid, conn);
+  updateClusterMapSelf(rid); // must happen before adopt_ack so child gets accurate childCount
   conn.send({
     type:             'adopt_ack',
     roomId:           rid,
     parentId:         state.myId,
-    grandparentId:    r.parentId,   // child stores this for upstream reconnect on parent loss
+    grandparentId:    r.parentId,
     distanceFromRoot: r.distanceFromRoot + 1,
     clusterMap:       r.clusterMap,
     siblings:         r.childIds.filter(id => id !== pid),
@@ -161,7 +189,7 @@ export function handleAdoptRequest(data, conn) {
   });
   broadcastChildList(rid);
   broadcastClusterMap(rid);
-  updateClusterMapSelf(rid);
+  updateClusterMapSelf(rid); // refresh again after broadcastChildList updates descendant counts
 }
 
 export function handleAdoptAck(data, conn) {
@@ -190,6 +218,10 @@ export function handleAdoptAck(data, conn) {
     }
   }
   updateClusterMapSelf(rid);
+  // Push our accurate entry up to the parent immediately — this ensures the
+  // parent (and root) know our real childCount before any subsequent node
+  // sends an adopt_request and gets redirected based on stale data.
+  broadcastClusterMap(rid);
   pickBackupPeer(rid);
 
   if (rid === state.activeRoomId) {
@@ -245,6 +277,7 @@ function broadcastChildList(rid) {
         type:            'child_count_update',
         roomId:          rid,
         count:           r.childIds.length,
+        childCount:      r.childIds.length,   // explicit field for capacity math
         id:              state.myId,
         descendantCount: myDescendantCount(rid),
       });
@@ -267,7 +300,9 @@ export function handlePeerDisconnect(pid) {
   for (const rid of roomsAffected) {
     const r = state.rooms[rid]; if (!r) continue;
     delete r.clusterMap[pid];
-    delete r.peers[pid];
+    // Keep r.peers[pid] intact — the peer is offline, not forgotten.
+    // renderRoomSidebar checks peerConns to determine online/offline status
+    // and shows a gray dot for peers not currently connected.
 
     if (pid === r.parentId)            onParentLost(rid);
     else if (r.childIds.includes(pid)) onChildLost(rid, pid);
@@ -602,7 +637,8 @@ export function updateClusterMapSelf(rid) {
   r.clusterMap[state.myId] = {
     name:            state.myName,
     distance:        r.distanceFromRoot,
-    connCount:       totalConnCount(rid),
+    connCount:       totalConnCount(rid),   // kept for legacy/display
+    childCount:      r.childIds.length,     // explicit child count for capacity checks
     descendantCount: myDescendantCount(rid),
   };
 }
@@ -652,7 +688,9 @@ function leastLoadedChild(rid) {
   const r = state.rooms[rid]; if (!r || !r.childIds.length) return null;
   return r.childIds.reduce((best, pid) => {
     const be = r.clusterMap[best], ce = r.clusterMap[pid];
-    return (ce?.connCount ?? 99) < (be?.connCount ?? 99) ? pid : best;
+    const bc = be?.childCount ?? be?.connCount ?? 99;
+    const cc = ce?.childCount ?? ce?.connCount ?? 99;
+    return cc < bc ? pid : best;
   }, r.childIds[0]);
 }
 

@@ -246,12 +246,14 @@ export function handleTyping(rid, data, senderId) {
   const fromParent = senderId === r.parentId;
 
   if (fromChild) {
+    // Relay upward toward root
     if (r.parentConn?.open) {
       try { r.parentConn.send(data); } catch {}
-    } else {
-      // We are root — fan out to all other children
-      state.cb.sendToAllChildren?.(rid, data, senderId);
     }
+    // Also fan down to our OTHER children (siblings of the sender) so every
+    // node in the subtree sees the indicator — not just nodes above us.
+    state.cb.sendToAllChildren?.(rid, data, senderId);
+    // If we are root (no parent), sendToAllChildren above already covers everyone.
   } else if (fromParent) {
     state.cb.sendToAllChildren?.(rid, data);
   }

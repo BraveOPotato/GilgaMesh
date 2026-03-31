@@ -1,6 +1,6 @@
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 export const MAX_CHILDREN        = 5;       // kept for election.js compatibility
-export const SOFT_CHILD_LIMIT    = 5;       // normal max children per node
+export const SOFT_CHILD_LIMIT    = 7;       // normal max children per node (fan of up to 7)
 export const HARD_CHILD_LIMIT    = 10;      // temporary max during recovery
 export const HEARTBEAT_INTERVAL  = 1000;    // ms between pings
 export const PING_TIMEOUT        = 3000;    // 3 missed pings → peer dead

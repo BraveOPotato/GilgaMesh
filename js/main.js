@@ -169,7 +169,14 @@ export function handleChatData(data, conn) {
         const r = state.rooms[rid];
         if (r.clusterMap[pid]) {
           r.clusterMap[pid].connCount       = data.count;
+          r.clusterMap[pid].childCount      = data.childCount ?? data.count;
           r.clusterMap[pid].descendantCount = data.descendantCount;
+        }
+        // Bubble the update up toward the root so the entire tree has
+        // accurate childCount data for every node — this is what lets
+        // the root correctly redirect newcomers to the right layer.
+        if (r.parentConn?.open) {
+          try { r.parentConn.send(data); } catch {}
         }
       }
       break;
@@ -232,7 +239,10 @@ function handleHandshakeMsg(data, conn) {
   if (!rid || !state.rooms[rid]) return;
   const r = state.rooms[rid];
 
+  // A peer is "new" only if we had no prior record of them at all —
+  // returning members loaded from storage already have an entry in r.peers.
   const isNew = !r.peers[pid];
+  const nameChanged = r.peers[pid] && r.peers[pid].name !== (state.peerAliases[pid] || data.name || pid);
   r.peers[pid] = r.peers[pid] || {};
   r.peers[pid].id   = pid;
   r.peers[pid].name = state.peerAliases[pid] || data.name || pid;
@@ -245,6 +255,7 @@ function handleHandshakeMsg(data, conn) {
       name:            data.name || pid,
       distance:        data.distanceFromRoot,
       connCount:       data.childCount || 0,
+      childCount:      data.childCount || 0,   // explicit field for capacity math
       descendantCount: data.descendantCount || 0,
     };
   }
@@ -254,6 +265,7 @@ function handleHandshakeMsg(data, conn) {
   }
 
   updateClusterMapSelf(rid);
+  saveStorage(); // persist updated name immediately
 
   if (rid === state.activeRoomId) {
     renderRoomSidebar();

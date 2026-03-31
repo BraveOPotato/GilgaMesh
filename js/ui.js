@@ -336,14 +336,22 @@ export function updateNetworkPanel() {
   document.getElementById('net-peers').textContent = r ? Object.keys(r.peers).length : 0;
   document.getElementById('net-my-id').textContent = state.myId || '—';
 
-  // ── FIX: show "Backup Peer: <full-peer-id>" per spec ─────────────────────
+  // Known = total nodes in cluster map
   const knownEl = document.getElementById('net-known');
-  if (r?.backupId) {
-    knownEl.textContent = `Backup Peer: ${r.backupId}`;
-    knownEl.title = r.backupId;
-  } else {
-    knownEl.textContent = r ? Object.keys(r.clusterMap || {}).length : 0;
-    knownEl.title = '';
+  knownEl.textContent = r ? Object.keys(r.clusterMap || {}).length : 0;
+  knownEl.title = '';
+
+  // Backup = separate field for the backup peer ID
+  const backupEl = document.getElementById('net-backup');
+  if (backupEl) {
+    if (r?.backupId) {
+      const backupName = r.peers[r.backupId]?.name || r.backupId;
+      backupEl.textContent = backupName;
+      backupEl.title = r.backupId;
+    } else {
+      backupEl.textContent = '—';
+      backupEl.title = '';
+    }
   }
 
   // Children panel
