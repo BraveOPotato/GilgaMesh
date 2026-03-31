@@ -53,7 +53,7 @@ export function renderRoomList() {
   const list = document.getElementById('rooms-list');
   const rids = Object.keys(state.rooms);
   if (!rids.length) {
-    list.innerHTML = '<div style="padding:8px 14px;font-size:11px;color:var(--text-muted)">No rooms</div>';
+    list.innerHTML = '<div style="padding:8px 14px;font-size:11px;color:var(--text-muted);text-align:center">No rooms</div>';
     return;
   }
   list.innerHTML = rids.map(rid => {
