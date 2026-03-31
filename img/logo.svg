@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1a1d2e"/>
+      <stop offset="100%" stop-color="#0d0f1a"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7b8cff"/>
+      <stop offset="100%" stop-color="#f5a623"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background hexagon -->
+  <polygon points="60,6 109,33 109,87 60,114 11,87 11,33"
+    fill="url(#bg)" stroke="rgba(91,108,249,0.35)" stroke-width="1.5"/>
+
+  <!-- Mesh connection lines -->
+  <!-- Center to outer nodes -->
+  <line x1="60" y1="60" x2="60" y2="22"  stroke="#5b6cf9" stroke-width="1" opacity="0.5"/>
+  <line x1="60" y1="60" x2="93" y2="41"  stroke="#5b6cf9" stroke-width="1" opacity="0.5"/>
+  <line x1="60" y1="60" x2="93" y2="79"  stroke="#5b6cf9" stroke-width="1" opacity="0.5"/>
+  <line x1="60" y1="60" x2="60" y2="98"  stroke="#5b6cf9" stroke-width="1" opacity="0.5"/>
+  <line x1="60" y1="60" x2="27" y2="79"  stroke="#5b6cf9" stroke-width="1" opacity="0.5"/>
+  <line x1="60" y1="60" x2="27" y2="41"  stroke="#5b6cf9" stroke-width="1" opacity="0.5"/>
+
+  <!-- Outer ring connections (hexagon perimeter) -->
+  <polygon points="60,22 93,41 93,79 60,98 27,79 27,41"
+    fill="none" stroke="rgba(91,108,249,0.25)" stroke-width="1"/>
+
+  <!-- Cross connections (mesh feel) -->
+  <line x1="60" y1="22" x2="93" y2="79"  stroke="rgba(245,166,35,0.2)" stroke-width="0.8"/>
+  <line x1="93" y1="41" x2="27" y2="79"  stroke="rgba(245,166,35,0.2)" stroke-width="0.8"/>
+  <line x1="27" y1="41" x2="60" y2="98"  stroke="rgba(245,166,35,0.2)" stroke-width="0.8"/>
+
+  <!-- Outer nodes -->
+  <circle cx="60" cy="22" r="5" fill="#1a1d27" stroke="#5b6cf9" stroke-width="1.5" filter="url(#glow)"/>
+  <circle cx="93" cy="41" r="5" fill="#1a1d27" stroke="#5b6cf9" stroke-width="1.5"/>
+  <circle cx="93" cy="79" r="5" fill="#1a1d27" stroke="#5b6cf9" stroke-width="1.5"/>
+  <circle cx="60" cy="98" r="5" fill="#1a1d27" stroke="#5b6cf9" stroke-width="1.5"/>
+  <circle cx="27" cy="79" r="5" fill="#1a1d27" stroke="#5b6cf9" stroke-width="1.5"/>
+  <circle cx="27" cy="41" r="5" fill="#1a1d27" stroke="#5b6cf9" stroke-width="1.5"/>
+
+  <!-- Center node — amber (elected server) with pulse ring -->
+  <circle cx="60" cy="60" r="20" fill="rgba(245,166,35,0.08)" stroke="rgba(245,166,35,0.3)" stroke-width="1">
+    <animate attributeName="r" values="20;26;20" dur="3s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="1;0.3;1" dur="3s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="60" cy="60" r="13" fill="rgba(245,166,35,0.15)" stroke="#f5a623" stroke-width="1.5" filter="url(#glow)"/>
+
+  <!-- G lettermark inside center -->
+  <text x="60" y="65" text-anchor="middle" fill="#f5a623"
+    font-family="'Space Grotesk',system-ui,sans-serif" font-size="14" font-weight="700"
+    letter-spacing="-0.5">G</text>
+</svg>

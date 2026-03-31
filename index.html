@@ -33,7 +33,6 @@ html.light {
   --shadow:0 8px 32px rgba(0,0,0,0.12); --shadow-md:0 4px 16px rgba(0,0,0,0.08);
   --scrollbar:#d0d3e8; --topo-bg:#eef0fa;
 }
-
 :root {
   --radius:10px; --radius-sm:6px; --radius-lg:16px;
   --font:'Space Grotesk',sans-serif; --mono:'JetBrains Mono',monospace;
@@ -41,12 +40,7 @@ html.light {
 }
 
 *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
-html,body {
-  height:100%; height:100dvh;
-  background:var(--bg-void); color:var(--text-primary);
-  font-family:var(--font); font-size:14px; line-height:1.5; overflow:hidden;
-  transition:background .25s,color .2s;
-}
+html,body { height:100%; height:100dvh; background:var(--bg-void); color:var(--text-primary); font-family:var(--font); font-size:14px; line-height:1.5; overflow:hidden; transition:background .25s,color .2s; }
 *,*::before,*::after { transition:background-color .2s,border-color .2s,color .15s,box-shadow .2s; }
 #sidebar,#network-panel-drawer { transition:transform .25s,background-color .2s,border-color .2s; }
 
@@ -58,101 +52,48 @@ html,body {
 .drawer-overlay.visible { display:block; }
 html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 
-/* ══════════════════════════════════════════
-   ROOM RAIL — narrow column of room icons
-══════════════════════════════════════════ */
-#room-rail {
-  width:var(--room-rail); min-width:var(--room-rail);
-  background:var(--bg-void);
-  border-right:1px solid var(--border);
-  display:flex; flex-direction:column; align-items:center;
-  padding:8px 0; gap:4px; overflow-y:auto; flex-shrink:0; z-index:2;
-}
+/* ── ROOM RAIL ── */
+#room-rail { width:var(--room-rail); min-width:var(--room-rail); background:var(--bg-void); border-right:1px solid var(--border); display:flex; flex-direction:column; align-items:center; padding:8px 0; gap:4px; overflow-y:auto; flex-shrink:0; z-index:2; }
 #room-rail::-webkit-scrollbar { width:0; }
-
-.room-item {
-  width:42px; height:42px;
-  position:relative; cursor:pointer; flex-shrink:0;
-}
-.room-icon {
-  width:42px; height:42px;
-  border-radius:14px;
-  border:1.5px solid transparent;
-  display:flex; align-items:center; justify-content:center;
-  font-size:17px; font-weight:700;
-  transition:border-radius .2s, border-color .15s;
-}
-.room-item:hover .room-icon { border-radius:10px; border-color:currentColor; }
-.room-item.active .room-icon { border-radius:10px; border-color:currentColor; }
-.room-badge {
-  position:absolute; top:-3px; right:-3px;
-  background:var(--red); color:#fff;
-  font-size:9px; font-weight:700;
-  padding:1px 4px; border-radius:8px; min-width:16px; text-align:center;
-  border:2px solid var(--bg-void);
-}
-
+.room-item { width:42px; height:42px; position:relative; cursor:pointer; flex-shrink:0; }
+.room-icon { width:42px; height:42px; margin: 0.5rem 0; border-radius:14px; border:1.5px solid transparent; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; transition:border-radius .2s,border-color .15s; }
+.room-item:hover .room-icon,.room-item.active .room-icon { border-radius:10px; border-color:currentColor; }
+.room-badge { position:absolute; top:-3px; right:-3px; background:var(--red); color:#fff; font-size:9px; font-weight:700; padding:1px 4px; border-radius:8px; min-width:16px; text-align:center; border:2px solid var(--bg-void); }
 .rail-divider { width:28px; height:1px; background:var(--border); margin:3px 0; flex-shrink:0; }
-
-#add-room-btn {
-  width:42px; height:42px;
-  border-radius:14px; border:1.5px dashed var(--border);
-  background:none; cursor:pointer;
-  display:flex; align-items:center; justify-content:center;
-  color:var(--text-muted); font-size:20px; line-height:1; flex-shrink:0;
-  transition:border-color .15s, color .15s, border-radius .2s;
-}
+#add-room-btn { width:42px; height:42px; border-radius:14px; border:1.5px dashed var(--border); background:none; cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--text-muted); font-size:20px; line-height:1; flex-shrink:0; transition:border-color .15s,color .15s,border-radius .2s; }
 #add-room-btn:hover { border-color:var(--accent); color:var(--accent); border-radius:10px; }
 
-/* ══════════════════════════════════════════
-   SIDEBAR — channels + members
-══════════════════════════════════════════ */
-#sidebar {
-  width:var(--sidebar-w); min-width:var(--sidebar-w);
-  background:var(--bg-deep); border-right:1px solid var(--border);
-  display:flex; flex-direction:column; overflow:hidden; flex-shrink:0; z-index:50;
-}
-#sidebar-header {
-  padding:12px 13px; border-bottom:1px solid var(--border);
-  display:flex; align-items:center; gap:8px; flex-shrink:0;
-}
-#active-room-name { font-size:14px; font-weight:700; letter-spacing:-.02em; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-#active-room-id   { font-size:10px; color:var(--text-muted); font-family:var(--mono); }
-#back-to-rooms {
-  background:none; border:none; cursor:pointer; color:var(--text-muted);
-  font-size:16px; padding:3px 5px; border-radius:5px; flex-shrink:0;
-  display:none;
-}
-#back-to-rooms:hover { color:var(--text-primary); background:var(--bg-hover); }
-#leave-strip {
-  display:none; padding:6px 10px; border-bottom:1px solid var(--border); flex-shrink:0;
-}
-#leave-room-btn {
-  width:100%; background:none; border:1px solid var(--border); cursor:pointer;
-  color:var(--text-muted); font-size:12px; font-family:var(--font);
-  padding:5px 10px; border-radius:var(--radius-sm);
-  text-align:left; line-height:1.4; display:flex; align-items:center; gap:6px;
-}
-#leave-room-btn:hover { color:var(--red); border-color:rgba(255,77,106,.35); background:var(--red-dim); }
+/* ── LOGO IN RAIL ── */
+#rail-logo { width:36px; height:36px; margin:4px 0 2px; flex-shrink:0; opacity:0.85; }
 
-.dot { width:7px; height:7px; border-radius:50%; background:var(--text-muted); }
+/* ── SIDEBAR ── */
+#sidebar { width:var(--sidebar-w); min-width:var(--sidebar-w); background:var(--bg-deep); border-right:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; flex-shrink:0; z-index:50; }
+#sidebar-header { padding:12px 13px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:8px; flex-shrink:0; }
+#active-room-name { font-size:14px; font-weight:700; letter-spacing:-.02em; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#active-room-id { font-size:10px; color:var(--text-muted); font-family:var(--mono); }
+#back-to-rooms { background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:16px; padding:3px 5px; border-radius:5px; flex-shrink:0; display:none; }
+#back-to-rooms:hover { color:var(--text-primary); background:var(--bg-hover); }
+.dot { width:7px; height:7px; border-radius:50%; background:var(--text-muted); flex-shrink:0; }
 .dot.connected { background:var(--green); box-shadow:0 0 6px var(--green); }
 .dot.server    { background:var(--amber); box-shadow:0 0 6px var(--amber); }
+.dot.alone     { background:var(--text-muted); }
 .dot.searching { background:var(--accent); animation:pulse-dot 1.2s ease-in-out infinite; }
 @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.8)} }
+
+#leave-strip { display:none; padding:6px 10px; border-bottom:1px solid var(--border); flex-shrink:0; }
+#leave-room-btn { width:100%; background:none; border:1px solid var(--border); cursor:pointer; color:var(--text-muted); font-size:12px; font-family:var(--font); padding:5px 10px; border-radius:var(--radius-sm); text-align:left; line-height:1.4; display:flex; align-items:center; gap:6px; }
+#leave-room-btn:hover { color:var(--red); border-color:rgba(255,77,106,.35); background:var(--red-dim); }
 
 #channels-section { flex:1; overflow-y:auto; padding:6px 0; }
 .section-label { padding:9px 13px 4px; font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); display:flex; align-items:center; justify-content:space-between; }
 .section-label button { background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:14px; line-height:1; padding:1px 3px; border-radius:4px; }
 .section-label button:hover { color:var(--text-primary); background:var(--bg-hover); }
-
 .channel-item { display:flex; align-items:center; gap:7px; padding:5px 9px 5px 13px; cursor:pointer; border-radius:var(--radius-sm); margin:1px 5px; color:var(--text-secondary); user-select:none; }
 .channel-item:hover  { background:var(--bg-hover); color:var(--text-primary); }
 .channel-item.active { background:var(--bg-active); color:var(--text-primary); }
 .channel-item .ch-icon { opacity:.55; flex-shrink:0; }
 .channel-item .ch-name { flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .channel-item .unread  { background:var(--red); color:#fff; font-size:10px; font-weight:600; padding:1px 5px; border-radius:10px; min-width:18px; text-align:center; }
-
 .peer-item { display:flex; align-items:center; gap:7px; padding:4px 9px 4px 12px; border-radius:var(--radius-sm); margin:1px 5px; }
 .peer-item:hover { background:var(--bg-hover); }
 .peer-avatar { width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; flex-shrink:0; position:relative; border:1.5px solid var(--border); }
@@ -160,21 +101,19 @@ html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 .peer-status-dot.online { background:var(--green); }
 .peer-status-dot.server { background:var(--amber); }
 .peer-name { font-size:12px; color:var(--text-secondary); flex:1; overflow:hidden; text-overflow:ellipsis; }
-.peer-role { font-size:10px; font-family:var(--mono); color:var(--accent); opacity:.8; }
+.peer-role { font-size:10px; font-family:var(--mono); color:var(--accent); opacity:.8; flex-shrink:0; }
+.divider { height:1px; background:var(--border); margin:3px 7px; }
 
 #user-panel { padding:9px 12px; border-top:1px solid var(--border); background:var(--bg-deep); display:flex; align-items:center; gap:8px; flex-shrink:0; }
 .my-avatar { width:30px; height:30px; border-radius:50%; background:var(--accent); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0; color:#fff; }
 .my-info   { flex:1; overflow:hidden; min-width:0; }
 .my-name   { font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.my-id     { font-size:10px; color:var(--text-muted); font-family:var(--mono); }
+.my-id     { font-size:10px; color:var(--text-muted); font-family:var(--mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .icon-btn  { background:none; border:none; cursor:pointer; color:var(--text-muted); padding:5px; border-radius:var(--radius-sm); font-size:15px; line-height:1; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .icon-btn:hover { color:var(--text-primary); background:var(--bg-hover); }
 
-/* ══════════════════════════════════════════
-   MAIN
-══════════════════════════════════════════ */
+/* ── MAIN ── */
 #main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; background:var(--bg-deep); }
-
 #chat-header { padding:11px 14px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:9px; background:var(--bg-deep); flex-shrink:0; }
 #menu-btn,#topo-btn { display:none; background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:18px; padding:4px 5px; border-radius:var(--radius-sm); flex-shrink:0; }
 #menu-btn:hover,#topo-btn:hover { color:var(--text-primary); background:var(--bg-hover); }
@@ -183,15 +122,8 @@ html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 .header-sep    { color:var(--border); flex-shrink:0; }
 #header-right  { margin-left:auto; display:flex; align-items:center; gap:6px; flex-shrink:0; }
 #peer-count    { display:flex; align-items:center; gap:5px; font-size:12px; color:var(--text-secondary); white-space:nowrap; }
-
-#invite-btn {
-  background:none; border:1px solid var(--border); cursor:pointer;
-  color:var(--text-muted); padding:4px 9px; border-radius:var(--radius-sm);
-  font-size:12px; font-family:var(--font); white-space:nowrap;
-  display:none; /* shown when in a room */
-}
+#invite-btn    { background:none; border:1px solid var(--border); cursor:pointer; color:var(--text-muted); padding:4px 9px; border-radius:var(--radius-sm); font-size:12px; font-family:var(--font); white-space:nowrap; display:none; }
 #invite-btn:hover { border-color:var(--border-accent); color:var(--text-primary); background:var(--bg-hover); }
-
 #theme-toggle { background:none; border:1px solid var(--border); cursor:pointer; padding:4px 7px; border-radius:var(--radius-sm); font-size:14px; line-height:1; color:var(--text-muted); display:flex; align-items:center; justify-content:center; }
 #theme-toggle:hover { border-color:var(--border-accent); color:var(--text-primary); background:var(--bg-hover); }
 
@@ -199,7 +131,6 @@ html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 #messages { flex:1; min-height:0; overflow-y:auto; padding:10px 14px; display:flex; flex-direction:column; gap:1px; scroll-behavior:smooth; }
 #messages::-webkit-scrollbar { width:4px; }
 #messages::-webkit-scrollbar-thumb { background:var(--scrollbar); border-radius:2px; }
-
 .msg-group { display:flex; flex-direction:column; gap:1px; margin-bottom:3px; }
 .msg-group:hover .msg-actions { opacity:1; }
 .msg-header { display:flex; align-items:baseline; gap:7px; padding-top:10px; margin-bottom:2px; flex-wrap:wrap; }
@@ -215,6 +146,11 @@ html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 .system-msg { text-align:center; color:var(--text-muted); font-size:11px; font-family:var(--mono); padding:6px 0; display:flex; align-items:center; gap:8px; }
 .system-msg::before,.system-msg::after { content:''; flex:1; height:1px; background:var(--border); }
 
+/* ── PENDING MESSAGES ── */
+.msg-pending { opacity:0.42; }
+.msg-pending .msg-text { font-style:italic; }
+.msg-pending-badge { font-size:10px; color:var(--text-muted); font-family:var(--mono); margin-left:6px; }
+
 /* ── FILE CARD ── */
 .file-card { display:inline-flex; align-items:center; gap:11px; background:var(--bg-raised); border:1px solid var(--border); border-radius:var(--radius); padding:9px 13px; max-width:380px; width:100%; cursor:default; margin-top:4px; }
 .file-card:hover { border-color:var(--border-accent); }
@@ -229,7 +165,7 @@ html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 .download-btn:disabled { background:var(--text-muted); cursor:not-allowed; }
 
 /* ── INPUT ── */
-#input-area { padding:8px 12px 13px; flex-shrink:0; padding-bottom:max(13px,calc(13px + env(safe-area-inset-bottom))); }
+#input-area { padding:8px 12px 13px; flex-shrink:0; padding-bottom:max(13px,calc(13px + env(safe-area-inset-bottom))); position:relative; }
 #input-box  { background:var(--bg-raised); border:1px solid var(--border); border-radius:var(--radius-lg); display:flex; align-items:flex-end; gap:6px; padding:5px 5px 5px 13px; }
 #input-box:focus-within { border-color:var(--border-accent); box-shadow:0 0 0 3px var(--accent-glow); }
 #msg-input  { flex:1; background:none; border:none; outline:none; color:var(--text-primary); font-size:13.5px; font-family:var(--font); resize:none; max-height:120px; line-height:1.5; padding:6px 0; overflow-y:auto; }
@@ -254,7 +190,7 @@ html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 .network-info { padding:0 14px 10px; display:flex; flex-direction:column; gap:7px; flex-shrink:0; }
 .net-stat { display:flex; align-items:center; justify-content:space-between; font-size:12px; }
 .net-stat-label { color:var(--text-muted); }
-.net-stat-value { font-family:var(--mono); font-size:11px; color:var(--accent); }
+.net-stat-value { font-family:var(--mono); font-size:11px; color:var(--accent); max-width:170px; overflow:hidden; text-overflow:ellipsis; text-align:right; }
 .role-badge { display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:var(--radius-sm); font-size:11px; font-family:var(--mono); font-weight:500; margin:0 14px 10px; flex-shrink:0; }
 .role-badge.server { background:rgba(245,166,35,.1); color:var(--amber); border:1px solid rgba(245,166,35,.28); }
 .role-badge.client { background:var(--accent-glow); color:var(--accent); border:1px solid var(--border-accent); }
@@ -265,10 +201,8 @@ html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 #manage-cands-btn:hover { color:var(--text-primary); background:var(--bg-hover); }
 .candidates-list { flex:1; overflow-y:auto; padding:0 10px 10px; display:flex; flex-direction:column; gap:3px; }
 .candidate-item { display:flex; align-items:center; gap:6px; padding:5px 8px; background:var(--bg-surface); border:1px solid var(--border); border-radius:var(--radius-sm); font-size:11px; }
-.candidate-item.elected { border-color:rgba(245,166,35,.3); background:rgba(245,166,35,.04); }
 .cand-rank  { color:var(--text-muted); font-family:var(--mono); width:14px; text-align:center; flex-shrink:0; }
 .cand-name  { flex:1; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; min-width:0; }
-.cand-name.aliased { color:var(--accent); font-style:italic; }
 .cand-score { font-family:var(--mono); color:var(--text-muted); font-size:10px; flex-shrink:0; }
 #connect-pane { padding:10px; border-top:1px solid var(--border); flex-shrink:0; }
 #connect-pane input { width:100%; background:var(--bg-raised); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 9px; color:var(--text-primary); font-size:12px; font-family:var(--mono); outline:none; margin-bottom:5px; }
@@ -298,22 +232,20 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
 .btn-secondary { background:var(--bg-raised); color:var(--text-secondary); border:1px solid var(--border); }
 .btn-secondary:hover { color:var(--text-primary); border-color:var(--border-accent); }
 
-/* invite info block */
+/* invite */
 .invite-info { background:var(--bg-raised); border:1px solid var(--border); border-radius:var(--radius); padding:12px 14px; margin-bottom:12px; }
 .invite-row  { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; }
 .invite-row:last-child { margin-bottom:0; }
 .invite-label{ font-size:10px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); flex-shrink:0; }
 .invite-value{ font-family:var(--mono); font-size:12px; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; flex:1; text-align:right; }
-
 .share-link-box { background:var(--bg-raised); border:1px solid var(--border-accent); border-radius:var(--radius); padding:11px; margin-top:6px; font-family:var(--mono); font-size:11px; color:var(--accent); word-break:break-all; display:flex; align-items:flex-start; gap:8px; }
 .share-link-box span { flex:1; }
 .share-link-box button { background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:14px; padding:1px 5px; border-radius:4px; flex-shrink:0; }
 .share-link-box button:hover { color:var(--text-primary); }
 
-/* manage candidates */
+/* manage */
 #manage-list { display:flex; flex-direction:column; gap:4px; max-height:340px; overflow-y:auto; }
 .mgmt-item { display:flex; align-items:center; gap:7px; padding:7px 10px; background:var(--bg-raised); border:1px solid var(--border); border-radius:var(--radius-sm); font-size:12px; }
-.mgmt-item.elected { border-color:rgba(245,166,35,.3); }
 .mgmt-dot  { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
 .mgmt-info { flex:1; overflow:hidden; min-width:0; }
 .mgmt-id   { font-family:var(--mono); font-size:10px; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -341,9 +273,17 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
 .typing-dots span:nth-child(3) { animation-delay:.4s; }
 @keyframes typ { 0%,80%,100%{transform:scale(.6);opacity:.4} 40%{transform:scale(1);opacity:1} }
 
+/* ── MENTION POPUP ── */
+#mention-popup { display:none; position:absolute; bottom:calc(100% + 6px); left:0; right:0; background:var(--bg-raised); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-md); overflow:hidden; z-index:90; max-height:220px; overflow-y:auto; }
+.mention-item { display:flex; align-items:center; gap:9px; padding:7px 12px; cursor:pointer; user-select:none; }
+.mention-item:hover,.mention-item.selected { background:var(--bg-hover); }
+.mention-avatar { width:24px; height:24px; border-radius:50%; border:1.5px solid; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; flex-shrink:0; }
+.mention-name { font-size:13px; font-weight:500; }
+.mention    { color:var(--accent); background:var(--accent-glow); border-radius:3px; padding:0 2px; font-weight:500; cursor:default; }
+.mention-me { color:var(--amber); background:rgba(245,166,35,0.12); }
+
 /* ── MISC ── */
-.divider { height:1px; background:var(--border); margin:3px 7px; }
-.hidden  { display:none !important; }
+.hidden { display:none !important; }
 ::-webkit-scrollbar { width:4px; }
 ::-webkit-scrollbar-thumb { background:var(--scrollbar); border-radius:2px; }
 
@@ -351,8 +291,8 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
 @media (max-width:1100px) {
   #network-panel-drawer { position:fixed; top:0; right:0; bottom:0; z-index:50; transform:translateX(100%); box-shadow:-4px 0 24px rgba(0,0,0,.45); }
   #network-panel-drawer.open { transform:translateX(0); }
-  #topo-btn    { display:flex; }
-  #np-close-btn{ display:flex; }
+  #topo-btn { display:flex; }
+  #np-close-btn { display:flex; }
 }
 @media (max-width:700px) {
   #sidebar { position:fixed; top:0; left:0; bottom:0; transform:translateX(-100%); box-shadow:4px 0 24px rgba(0,0,0,.45); }
@@ -363,18 +303,19 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
   #toast-container { bottom:72px; right:10px; left:10px; }
   .toast { max-width:100%; }
   #input-area { padding:7px 9px 11px; padding-bottom:max(11px,calc(11px + env(safe-area-inset-bottom))); }
-  #messages   { padding:9px 10px; }
+  #messages { padding:9px 10px; }
 }
 </style>
 </head>
 <body>
 <div id="app">
-
   <div id="sidebar-overlay"  class="drawer-overlay"></div>
   <div id="netpanel-overlay" class="drawer-overlay"></div>
 
   <!-- ═══ ROOM RAIL ═══ -->
   <div id="room-rail">
+    <img id="rail-logo" src="img/logo.svg" alt="GilgaMesh" title="GilgaMesh">
+    <div class="rail-divider"></div>
     <div id="rooms-list"></div>
     <div class="rail-divider"></div>
     <button id="add-room-btn" onclick="showCreateRoom()" title="Create room">+</button>
@@ -394,14 +335,10 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
     <div id="leave-strip">
       <button id="leave-room-btn" onclick="confirmLeaveRoom()">⬡ Leave Room</button>
     </div>
-    <!-- hidden span keeps JS setStatus() working without errors -->
     <span id="status-text" style="display:none"></span>
 
     <div id="channels-section">
-      <div class="section-label">
-        Channels
-        <button onclick="showAddChannel()" title="New channel">+</button>
-      </div>
+      <div class="section-label">Channels <button onclick="showAddChannel()" title="New channel">+</button></div>
       <div id="channels-list"></div>
       <div class="divider"></div>
       <div class="section-label">Members</div>
@@ -426,13 +363,12 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
       <span class="channel-title" id="active-channel-title">Rooms</span>
       <span class="header-sep">|</span>
       <span class="channel-desc"  id="active-channel-desc">Your peer-to-peer rooms</span>
-
       <div id="header-right">
         <div id="peer-count">
           <div class="dot connected" style="width:8px;height:8px"></div>
           <span id="peer-count-text"></span>
         </div>
-        <button id="invite-btn" onclick="showInvite()" title="Invite to room">+ Invite</button>
+        <button id="invite-btn" onclick="showInvite()">+ Invite</button>
         <button id="theme-toggle" onclick="toggleTheme()" title="Toggle theme">🌙</button>
         <button id="topo-btn"    onclick="openNetPanel()" title="Network Topology">⬡</button>
       </div>
@@ -455,7 +391,6 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
           <button id="send-btn" title="Send" disabled>➤</button>
         </div>
       </div>
-      <input type="file" id="file-input" class="hidden" multiple>
     </div>
   </div>
 
@@ -463,7 +398,7 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
   <div id="network-panel-drawer">
     <div id="np-header">
       <span>⬡</span> Network Topology
-      <button id="np-close-btn" onclick="closeNetPanel()" title="Close">✕</button>
+      <button id="np-close-btn" onclick="closeNetPanel()">✕</button>
     </div>
     <div class="topology-canvas"><svg id="topo-svg" viewBox="0 0 256 180"></svg></div>
     <div id="my-role-badge" class="role-badge alone"><span>◉</span> <span id="role-text">No room selected</span></div>
@@ -471,26 +406,24 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
       <div class="net-stat"><span class="net-stat-label">Your ID</span><span class="net-stat-value" id="net-my-id">—</span></div>
       <div class="net-stat"><span class="net-stat-label">Role</span><span class="net-stat-value" id="net-role">—</span></div>
       <div class="net-stat"><span class="net-stat-label">Members</span><span class="net-stat-value" id="net-peers">0</span></div>
-      <div class="net-stat"><span class="net-stat-label">Known</span><span class="net-stat-value" id="net-known">0</span></div>
+      <div class="net-stat"><span class="net-stat-label">Known</span><span class="net-stat-value" id="net-known" title="">0</span></div>
       <div class="net-stat"><span class="net-stat-label">Latency</span><span class="net-stat-value" id="net-latency">— ms</span></div>
     </div>
     <div class="cands-header">
-      <span class="cands-header-label">Server Candidates</span>
-      <button id="manage-cands-btn" onclick="openManageCandidates()">Manage</button>
+      <span class="cands-header-label">Children</span>
+      <button id="manage-cands-btn" onclick="openManageCandidates()">Rename</button>
     </div>
     <div class="candidates-list" id="candidates-list"></div>
     <div id="connect-pane">
-      <input type="text" id="connect-peer-id" placeholder="Peer ID…" style="margin-bottom:4px">
-      <input type="text" id="connect-room-id" placeholder="Room ID (optional, 4 digits)…" style="font-family:var(--mono)">
+      <input type="text" id="connect-peer-id" placeholder="Peer ID…">
+      <input type="text" id="connect-room-id" placeholder="Room ID (optional)…" style="font-family:var(--mono)">
       <button onclick="manualConnect()">Connect</button>
     </div>
   </div>
-
-</div><!-- #app -->
+</div>
 
 <!-- ═══ MODALS ═══ -->
 
-<!-- Setup -->
 <div class="modal-overlay hidden" id="setup-modal">
   <div class="modal">
     <h2>Welcome to GilgaMesh</h2>
@@ -503,19 +436,12 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
   </div>
 </div>
 
-<!-- Settings -->
 <div class="modal-overlay hidden" id="settings-modal">
   <div class="modal">
     <h2>Settings</h2>
-    <p>Manage your identity and preferences.</p>
-    <div class="form-group">
-      <label class="form-label">Display Name</label>
-      <input type="text" class="form-input" id="settings-name" maxlength="32">
-    </div>
-    <div class="form-group">
-      <label class="form-label">Your Peer ID</label>
-      <input type="text" class="form-input" id="settings-peer-id" readonly style="font-family:var(--mono);font-size:12px">
-    </div>
+    <p>Manage your identity.</p>
+    <div class="form-group"><label class="form-label">Display Name</label><input type="text" class="form-input" id="settings-name" maxlength="32"></div>
+    <div class="form-group"><label class="form-label">Your Peer ID</label><input type="text" class="form-input" id="settings-peer-id" readonly style="font-family:var(--mono);font-size:12px"></div>
     <div class="btn-row">
       <button class="btn btn-secondary" onclick="closeModal('settings-modal')">Cancel</button>
       <button class="btn btn-primary"   onclick="saveSettings()">Save</button>
@@ -523,15 +449,11 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
   </div>
 </div>
 
-<!-- Create Room -->
 <div class="modal-overlay hidden" id="create-room-modal">
   <div class="modal">
     <h2>Create Room</h2>
     <p>Start a new peer-to-peer room. Share the invite link to bring others in.</p>
-    <div class="form-group">
-      <label class="form-label">Room Name</label>
-      <input type="text" class="form-input" id="new-room-name" placeholder="e.g. Gaming Crew" maxlength="40" autocomplete="off">
-    </div>
+    <div class="form-group"><label class="form-label">Room Name</label><input type="text" class="form-input" id="new-room-name" placeholder="e.g. Gaming Crew" maxlength="40" autocomplete="off"></div>
     <div class="btn-row">
       <button class="btn btn-secondary" onclick="closeModal('create-room-modal')">Cancel</button>
       <button class="btn btn-primary"   onclick="createRoom()">Create Room</button>
@@ -539,48 +461,26 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
   </div>
 </div>
 
-<!-- Invite -->
 <div class="modal-overlay hidden" id="invite-modal">
   <div class="modal">
     <h2>Invite to Room</h2>
-    <p>Share this link with anyone you want to invite. They'll connect directly through your peer.</p>
+    <p>Share this link to invite someone directly through your peer node.</p>
     <div class="invite-info">
-      <div class="invite-row">
-        <span class="invite-label">Room</span>
-        <span class="invite-value" id="invite-room-name"></span>
-      </div>
-      <div class="invite-row">
-        <span class="invite-label">Room ID</span>
-        <span class="invite-value" id="invite-room-id" style="font-family:var(--mono)"></span>
-      </div>
-      <div class="invite-row">
-        <span class="invite-label">Your Peer ID</span>
-        <span class="invite-value" id="invite-peer-id" style="font-family:var(--mono)"></span>
-      </div>
+      <div class="invite-row"><span class="invite-label">Room</span><span class="invite-value" id="invite-room-name"></span></div>
+      <div class="invite-row"><span class="invite-label">Room ID</span><span class="invite-value" id="invite-room-id" style="font-family:var(--mono)"></span></div>
+      <div class="invite-row"><span class="invite-label">Your Peer ID</span><span class="invite-value" id="invite-peer-id" style="font-family:var(--mono)"></span></div>
     </div>
-    <div class="share-link-box">
-      <span id="invite-link"></span>
-      <button onclick="copyInviteLink()">⎘</button>
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-secondary" onclick="closeModal('invite-modal')">Close</button>
-    </div>
+    <div class="share-link-box"><span id="invite-link"></span><button onclick="copyInviteLink()">⎘</button></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal('invite-modal')">Close</button></div>
   </div>
 </div>
 
-<!-- Add Channel -->
 <div class="modal-overlay hidden" id="add-channel-modal">
   <div class="modal">
     <h2>New Channel</h2>
     <p>Create a topic channel in this room.</p>
-    <div class="form-group">
-      <label class="form-label">Channel Name</label>
-      <input type="text" class="form-input" id="new-channel-name" placeholder="e.g. off-topic" maxlength="32">
-    </div>
-    <div class="form-group">
-      <label class="form-label">Description (optional)</label>
-      <input type="text" class="form-input" id="new-channel-desc" placeholder="What's this for?" maxlength="80">
-    </div>
+    <div class="form-group"><label class="form-label">Channel Name</label><input type="text" class="form-input" id="new-channel-name" placeholder="e.g. off-topic" maxlength="32"></div>
+    <div class="form-group"><label class="form-label">Description (optional)</label><input type="text" class="form-input" id="new-channel-desc" placeholder="What's this for?" maxlength="80"></div>
     <div class="btn-row">
       <button class="btn btn-secondary" onclick="closeModal('add-channel-modal')">Cancel</button>
       <button class="btn btn-primary"   onclick="createChannel()">Create</button>
@@ -588,11 +488,10 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
   </div>
 </div>
 
-<!-- File Share -->
 <div class="modal-overlay hidden" id="file-share-modal">
   <div class="modal">
     <h2>Share File</h2>
-    <p>Creates a <strong>60-second</strong> direct P2P transfer link. Nothing passes through any server.</p>
+    <p>Creates a <strong>60-second</strong> direct P2P transfer link.</p>
     <div id="file-share-content">
       <div id="file-dropzone" style="border:2px dashed var(--border);border-radius:var(--radius);padding:26px;text-align:center;color:var(--text-muted);cursor:pointer">
         <div style="font-size:26px;margin-bottom:7px">📁</div>
@@ -603,39 +502,36 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
     </div>
     <div id="file-share-link-area" class="hidden">
       <div style="font-size:13px;font-weight:500;margin-bottom:7px" id="share-filename"></div>
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:9px">
-        Expires in <span id="share-countdown" style="color:var(--amber);font-family:var(--mono);font-weight:600">60s</span>
-      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:9px">Expires in <span id="share-countdown" style="color:var(--amber);font-family:var(--mono);font-weight:600">60s</span></div>
       <div class="share-link-box"><span id="share-link-text"></span><button onclick="copyShareLink()">⎘</button></div>
     </div>
     <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal('file-share-modal')">Close</button></div>
   </div>
 </div>
 
-<!-- Manage Candidates -->
 <div class="modal-overlay hidden" id="manage-candidates-modal">
   <div class="modal" style="width:min(520px,100%)">
-    <h2>Manage Server Candidates</h2>
-    <p>Rename peers for easy identification, or remove stale entries. The elected server (★) cannot be removed while active.</p>
+    <h2>Rename Peers</h2>
+    <p>Give peers friendly display names. Changes are local only.</p>
     <div id="manage-list"></div>
     <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal('manage-candidates-modal')">Done</button></div>
   </div>
 </div>
 
-<!-- Leave Room confirmation -->
 <div class="modal-overlay hidden" id="leave-room-modal">
   <div class="modal" style="max-width:380px">
     <h2>Leave Room?</h2>
-    <p>You'll be removed from <strong id="leave-room-name"></strong>. All local message history for this room will be deleted. You can rejoin later with an invite link.</p>
+    <p>You'll be removed from <strong id="leave-room-name"></strong>. Local history will be deleted.</p>
     <div class="btn-row">
       <button class="btn btn-secondary" onclick="closeModal('leave-room-modal')">Cancel</button>
-      <button class="btn" style="background:var(--red);color:#fff;" onclick="leaveRoom()">Leave Room</button>
+      <button class="btn" style="background:var(--red);color:#fff" onclick="leaveRoom()">Leave Room</button>
     </div>
   </div>
 </div>
 
 <div id="toast-container"></div>
+
 <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
-<script src="js/app.js"></script>
+<script type="module" src="js/main.js"></script>
 </body>
 </html>
