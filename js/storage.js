@@ -14,6 +14,12 @@ export function loadStorage() {
       state.rooms[rid] = makeRoomShell(r.id, r.name, r.createdBy);
       state.rooms[rid].savedPeers = r.savedPeers || [];
       if (r.channels && r.channels.length) state.rooms[rid].channels = r.channels;
+      // Restore known peers so offline members remain visible in the sidebar
+      if (r.peers) {
+        for (const [pid, p] of Object.entries(r.peers)) {
+          state.rooms[rid].peers[pid] = { id: pid, name: p.name || pid };
+        }
+      }
       const msgs = r.messages || {};
       for (const ch of state.rooms[rid].channels) {
         state.rooms[rid].messages[ch.id] = (msgs[ch.id] || []).slice(-200);
@@ -30,9 +36,15 @@ export function saveStorage() {
   for (const [rid, r] of Object.entries(state.rooms)) {
     const msgs = {};
     for (const ch of r.channels) msgs[ch.id] = (r.messages[ch.id] || []).slice(-200);
+    // Persist peer registry (id + name) so offline members stay visible after reload
+    const peerRegistry = {};
+    for (const [pid, p] of Object.entries(r.peers || {})) {
+      peerRegistry[pid] = { id: pid, name: p.name || pid };
+    }
     storedRooms[rid] = {
       id: r.id, name: r.name, createdBy: r.createdBy,
       savedPeers: r.savedPeers, channels: r.channels, messages: msgs,
+      peers: peerRegistry,
     };
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -64,6 +76,7 @@ export function makeRoomShell(id, name, createdBy) {
     // ── Recovery & rebalancing ───────────────────────────────────────────────
     recoveryLock:   0,     // Date.now() value until which new recovery is suppressed
     rebalanceTimer: null,  // setInterval handle
+    _joiningParent: false, // true while findAndJoinParent is in progress
     _recoverCollect: null, // callback set during RECOVER_PROCEDURE for response collection
 
     // ── Cluster topology snapshot ─────────────────────────────────────────────

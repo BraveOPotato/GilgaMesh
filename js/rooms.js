@@ -1,7 +1,7 @@
 import { state } from './state.js';
 import { makeRoomShell, saveStorage } from './storage.js';
 import { generateRoomId } from './ids.js';
-import { becomeRoot, savePeerToRoom, updateClusterMapSelf, broadcastClusterMap, handleAdoptRequest } from './mesh.js';
+import { becomeRoot, savePeerToRoom, updateClusterMapSelf, broadcastClusterMap, handleAdoptRequest, findAndJoinParent } from './mesh.js';
 import { startLocalElection, stopLocalElection } from './election.js';
 import { displayMessage, addSystemMsg } from './messaging.js';
 import { toast, renderRoomList, renderRoomSidebar, renderRoomGrid, renderAllMessages,
@@ -27,16 +27,66 @@ export function createRoom() {
 // ─── JOIN VIA INVITE ─────────────────────────────────────────────────────────
 export function joinRoomViaInvite(rid, roomName, viaPeerId) {
   if (state.rooms[rid]) { switchRoom(rid); toast(`Already in "${state.rooms[rid].name}"`, 'info'); return; }
+
+  // Create the room shell so the rest of the UI works, but don't treat ourselves
+  // as placed yet — _joiningParent stays false until we have a real cluster map.
   state.rooms[rid] = makeRoomShell(rid, roomName || `Room ${rid}`, null);
   saveStorage(); renderRoomList();
+  switchRoom(rid);
+  toast(`Joining room "${state.rooms[rid].name}"…`, 'info');
 
-  state.cb.connectTo?.(viaPeerId, conn => {
-    conn.send({ type: 'cluster_map_request', roomId: rid, id: state.myId, name: state.myName });
-    switchRoom(rid);
-    toast(`Joining room "${state.rooms[rid].name}"…`, 'info');
-  }, () => {
-    toast('Could not connect to invite peer', 'error');
-    delete state.rooms[rid]; renderRoomList();
+  console.log(`[rooms] joinRoomViaInvite(${rid}) — scouting cluster map via ${viaPeerId}`);
+
+  import('./peer.js').then(({ scoutClusterMap }) => {
+    const MAX_ATTEMPTS = 6;        // 1 initial + 5 retries
+    const RETRY_INTERVAL_MS = 200; // 200 ms between each retry
+    let attempt = 0;
+
+    const tryScout = () => {
+      attempt++;
+      console.log(`[rooms] joinRoomViaInvite(${rid}) — scout attempt ${attempt}/${MAX_ATTEMPTS} via ${viaPeerId}`);
+
+      scoutClusterMap(viaPeerId, rid, (map) => {
+        const r = state.rooms[rid];
+        if (!r) return; // room was deleted while we were connecting
+
+        if (map === null) {
+          // Reusing existing connection — map will arrive via normal dispatch,
+          // which triggers findAndJoinParent automatically.
+          console.log(`[rooms] joinRoomViaInvite(${rid}) — map arriving via existing conn`);
+          return;
+        }
+
+        // Merge the received map into our clusterMap
+        console.log(`[rooms] joinRoomViaInvite(${rid}) — received map with ${Object.keys(map).length} entries on attempt ${attempt}`);
+        for (const [pid, entry] of Object.entries(map)) {
+          if (pid === state.myId) continue;
+          r.clusterMap[pid] = entry;
+          if (!r.peers[pid]) r.peers[pid] = { id: pid, name: entry.name || pid };
+        }
+        // Ensure the inviting peer is in the map even if it omitted its own entry
+        if (!r.clusterMap[viaPeerId]) {
+          r.clusterMap[viaPeerId] = { name: viaPeerId, distance: 0, childCount: 0, connCount: 0, descendantCount: 1 };
+        }
+        updateClusterMapSelf(rid);
+
+        console.log(`[rooms] joinRoomViaInvite(${rid}) — clusterMap ready, finding optimal parent`);
+        findAndJoinParent(rid);
+      }, (reason) => {
+        console.log(`[rooms] joinRoomViaInvite(${rid}) — scout attempt ${attempt} failed: ${reason}`);
+
+        if (attempt < MAX_ATTEMPTS && state.rooms[rid]) {
+          console.log(`[rooms] joinRoomViaInvite(${rid}) — retrying in ${RETRY_INTERVAL_MS}ms`);
+          setTimeout(tryScout, RETRY_INTERVAL_MS);
+        } else {
+          console.log(`[rooms] joinRoomViaInvite(${rid}) — all ${MAX_ATTEMPTS} attempts failed, giving up`);
+          toast('Could not reach invite peer', 'error');
+          delete state.rooms[rid]; renderRoomList();
+        }
+      });
+    };
+
+    tryScout();
   });
 }
 
@@ -188,7 +238,15 @@ export function checkJoinUrl() {
   if (rid && via) {
     history.replaceState({}, '', location.pathname);
     const attempt = () => {
-      if (!state.peer || !state.myId) { setTimeout(attempt, 500); return; }
+      // state.peer exists as soon as new Peer() is called, but .open is only
+      // true after the peer.on('open') callback fires — which is when
+      // peer.connect() actually works. Checking only state.myId was equivalent
+      // since myId is set in that same callback, but be explicit here.
+      if (!state.peer?.open || !state.myId) {
+        console.log('[rooms] checkJoinUrl — peer not open yet, retrying in 500ms');
+        setTimeout(attempt, 500);
+        return;
+      }
       joinRoomViaInvite(rid, rname, via);
     };
     setTimeout(attempt, 800);

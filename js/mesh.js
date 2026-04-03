@@ -76,44 +76,150 @@ function parentScore(entry) {
 // ─── JOIN CLUSTER ─────────────────────────────────────────────────────────────
 export function findAndJoinParent(rid) {
   const r = state.rooms[rid]; if (!r) return;
+  if (r.parentId || r.childIds.length) {
+    console.log(`[mesh] findAndJoinParent(${rid}) skipped — already placed (parent=${r.parentId}, children=${r.childIds.length})`);
+    return;
+  }
+  if (r._joiningParent) {
+    console.log(`[mesh] findAndJoinParent(${rid}) skipped — join already in progress`);
+    return;
+  }
+  r._joiningParent = true;
 
-  // Eligible = has room for at least one more child (below SOFT_CHILD_LIMIT).
-  // childCount is explicit; fall back to connCount heuristic for older map entries.
-  const candidates = Object.entries(r.clusterMap)
+  const mapEntries = Object.entries(r.clusterMap).filter(([p]) => p !== state.myId);
+  console.log(`[mesh] findAndJoinParent(${rid}) — clusterMap has ${mapEntries.length} peers:`,
+    mapEntries.map(([p, e]) => `${e.name||p}(dist=${e.distance},children=${e.childCount??e.connCount??'?'})`).join(', ') || '(none)');
+
+  const candidates = mapEntries
     .filter(([pid, e]) => {
-      if (pid === state.myId) return false;
       const children = e.childCount ?? Math.max(0, e.connCount - (e.distance === 0 ? 0 : 1));
       return children < SOFT_CHILD_LIMIT;
     })
     .sort(([, a], [, b]) => parentScore(b) - parentScore(a))
     .map(([pid]) => pid);
 
-  if (!candidates.length) { becomeRoot(rid); return; }
+  console.log(`[mesh] findAndJoinParent(${rid}) — ${candidates.length} eligible candidates:`, candidates.join(', ') || '(none)');
+
+  if (!candidates.length) {
+    r._joiningParent = false;
+    // Explain exactly why each map entry was rejected
+    const rejections = mapEntries.map(([pid, e]) => {
+      const children = e.childCount ?? Math.max(0, e.connCount - (e.distance === 0 ? 0 : 1));
+      return `${e.name||pid}(dist=${e.distance},childCount=${e.childCount??'undef'},connCount=${e.connCount??'undef'},computed=${children},limit=${SOFT_CHILD_LIMIT},full=${children >= SOFT_CHILD_LIMIT})`;
+    });
+    console.log(`[mesh] findAndJoinParent(${rid}) — NO ELIGIBLE CANDIDATES. Rejections:`, rejections.join(' | ') || '(clusterMap was empty)');
+    becomeRoot(rid); return;
+  }
   tryParentCandidates(rid, candidates, 0);
 }
 
 function tryParentCandidates(rid, candidates, idx) {
-  if (idx >= candidates.length) { becomeRoot(rid); return; }
-  const r = state.rooms[rid]; if (!r) { becomeRoot(rid); return; }
+  const r = state.rooms[rid];
+  if (idx >= candidates.length) {
+    console.log(`[mesh] tryParentCandidates(${rid}) — exhausted all ${candidates.length} candidates, calling becomeRoot`);
+    if (r) r._joiningParent = false;
+    becomeRoot(rid); return;
+  }
+  if (!r) { becomeRoot(rid); return; }
+
+  if (r.parentId) {
+    console.log(`[mesh] tryParentCandidates(${rid}) — already have parent ${r.parentId}, aborting`);
+    r._joiningParent = false; return;
+  }
+
   const pid = candidates[idx];
 
-  // Skip peers that are already our children — connecting to them as a parent
-  // would create a cycle (we'd be both parent and child of the same node).
   if (r.childIds.includes(pid)) {
+    console.log(`[mesh] tryParentCandidates(${rid}) — skipping ${pid} (already our child)`);
     tryParentCandidates(rid, candidates, idx + 1);
     return;
   }
 
+  console.log(`[mesh] tryParentCandidates(${rid}) — trying candidate [${idx}] ${pid}`);
   state.cb.connectTo?.(pid, conn => {
+    const rr = state.rooms[rid];
+    if (rr?.parentId) {
+      console.log(`[mesh] tryParentCandidates(${rid}) — connected to ${pid} but already parented to ${rr.parentId}, aborting`);
+      rr._joiningParent = false; return;
+    }
+    console.log(`[mesh] tryParentCandidates(${rid}) — connected to ${pid}, sending adopt_request`);
     conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
   }, () => {
+    console.log(`[mesh] tryParentCandidates(${rid}) — connect to ${pid} failed, trying next`);
     setTimeout(() => tryParentCandidates(rid, candidates, idx + 1), RECONNECT_DELAY);
   });
 }
 
 export function becomeRoot(rid) {
   const r = state.rooms[rid]; if (!r) return;
+
+  // Never become root if a join is actively in progress — the adopt flow
+  // will resolve shortly and calling becomeRoot now would clobber it.
+  if (r._joiningParent) return;
+
+  // Never become root if there are live open connections to peers we know
+  // belong to this room, OR peers listed in our clusterMap (which means
+  // the cluster exists even if pc.rooms hasn't been updated yet).
+  // pc.rooms may not contain rid yet if the connection was just established
+  // for the cluster_map_request before handleClusterMapRequest ran.
+  // Check 1: live open peerConns that belong to this room
+  const livePeerEntries = Object.entries(state.peerConns).filter(([pid, pc]) => {
+    if (!pc?.conn?.open || pid === state.myId) return false;
+    return pc.rooms?.has(rid) || r.clusterMap?.[pid];
+  });
+
+  // Check 2: clusterMap has entries from OTHER peers — even if the scout conn
+  // has already closed, the map entries tell us the cluster exists.
+  // Only skip this check if we were explicitly created as the room's first node
+  // (createdBy === myId), which means WE are legitimately the root.
+  const clusterPeersInMap = Object.keys(r.clusterMap).filter(p => p !== state.myId);
+  const clusterExistsInMap = clusterPeersInMap.length > 0 && r.createdBy !== state.myId;
+
+  const hasLivePeer = livePeerEntries.length > 0;
+  const shouldSuppress = hasLivePeer || clusterExistsInMap;
+
+  if (shouldSuppress) {
+    const reason = hasLivePeer
+      ? `${livePeerEntries.length} live peerConn(s): ${livePeerEntries.map(([p])=>p).join(', ')}`
+      : `clusterMap has ${clusterPeersInMap.length} peer(s) and we didn't create this room`;
+
+    r._becomeRootRetries = (r._becomeRootRetries || 0) + 1;
+    const MAX_RETRIES = 8;
+
+    if (r._becomeRootRetries > MAX_RETRIES) {
+      // We've been trying for a long time and still can't attach.
+      // Clear the clusterMap so we stop thinking a cluster exists,
+      // then become root. The rebalancer will re-integrate us if peers reconnect.
+      console.warn(`[mesh] becomeRoot(${rid}) — suppressed ${r._becomeRootRetries}x but still can't attach. Clearing stale clusterMap and becoming root.`);
+      r._becomeRootRetries = 0;
+      for (const pid of clusterPeersInMap) {
+        const pc = state.peerConns[pid];
+        if (!pc?.conn?.open) delete r.clusterMap[pid];
+      }
+      // Fall through to become root below
+    } else {
+      const delay = Math.min(500 * Math.pow(1.5, r._becomeRootRetries - 1), 8000);
+      console.log(`[mesh] becomeRoot(${rid}) SUPPRESSED (attempt ${r._becomeRootRetries}/${MAX_RETRIES}) — ${reason} — retrying findAndJoinParent in ${Math.round(delay)}ms`);
+      if (!r.parentId && !r.childIds.length) {
+        setTimeout(() => findAndJoinParent(rid), delay);
+      }
+      return;
+    }
+  }
+
+  r._joiningParent   = false;
   const wasAlreadyRoot = r.parentId === null && r.distanceFromRoot === 0 && !r.grandparentId;
+  if (!wasAlreadyRoot) {
+    // Log exactly why we passed all guards and became root
+    const clusterPeers = Object.keys(r.clusterMap).filter(p => p !== state.myId);
+    const openConns = Object.entries(state.peerConns)
+      .filter(([pid, pc]) => pc?.conn?.open && pid !== state.myId)
+      .map(([pid]) => pid);
+    console.log(`[mesh] becomeRoot(${rid}) — BECOMING ROOT`,
+      `| clusterMap peers: ${clusterPeers.join(', ') || '(none)'}`,
+      `| open peerConns: ${openConns.join(', ') || '(none)'}`,
+      `| _joiningParent was: ${r._joiningParent}`);
+  }
   r.parentId         = null;
   r.parentConn       = null;
   r.grandparentId    = null;
@@ -171,10 +277,12 @@ export function handleAdoptRequest(data, conn) {
         return ac - bc;
       });
     const target = available[0]?.[0] ?? null;
+    console.log(`[mesh] handleAdoptRequest(${rid}) — full (${r.childIds.length} children), redirecting ${pid} to ${target || '(none)'}`);
     conn.send({ type: 'adopt_redirect', roomId: rid, targetId: target });
     return;
   }
 
+  console.log(`[mesh] handleAdoptRequest(${rid}) — accepting ${pid} as child (now ${r.childIds.length + 1} children)`);
   addChild(rid, pid, conn);
   updateClusterMapSelf(rid); // must happen before adopt_ack so child gets accurate childCount
   conn.send({
@@ -203,6 +311,9 @@ export function handleAdoptAck(data, conn) {
     return;
   }
 
+  console.log(`[mesh] handleAdoptAck(${rid}) — joined cluster, parent=${data.parentId}, dist=${data.distanceFromRoot}`);
+  r._joiningParent = false;
+  r._becomeRootRetries = 0;
   r.parentId         = data.parentId;
   r.parentConn       = conn;
   r.grandparentId    = data.grandparentId ?? null;
@@ -238,17 +349,29 @@ export function handleAdoptAck(data, conn) {
 
 export function handleAdoptRedirect(data) {
   const rid = data.roomId;
-  if (!data.targetId) { becomeRoot(rid); return; }
+  const r = state.rooms[rid];
+  console.log(`[mesh] handleAdoptRedirect(${rid}) — redirected to ${data.targetId || '(none)'}`);
+  if (r) r._joiningParent = false;
+  if (!data.targetId) {
+    // No redirect target — retry the full candidate search
+    setTimeout(() => findAndJoinParent(rid), RECONNECT_DELAY);
+    return;
+  }
   state.cb.connectTo?.(data.targetId, conn => {
     conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
-  }, () => becomeRoot(rid));
+  }, () => {
+    // Connect to redirect target failed — retry the full candidate search
+    setTimeout(() => findAndJoinParent(rid), RECONNECT_DELAY);
+  });
 }
 
 // Peer rejected our adopt_request (cycle detected or already parented).
 // Run recovery so we find a valid parent rather than hanging.
 export function handleAdoptReject(data) {
   const rid = data.roomId, r = state.rooms[rid]; if (!r) return;
-  if (r.parentId) return; // already found a parent via another path
+  console.log(`[mesh] handleAdoptReject(${rid}) — reason: ${data.reason}`);
+  r._joiningParent = false;
+  if (r.parentId) return;
   recoverProcedure(rid);
 }
 
@@ -316,11 +439,14 @@ export function handlePeerDisconnect(pid) {
 function onParentLost(rid) {
   const r = state.rooms[rid]; if (!r) return;
 
-  // Recovery lock: ignore if a recovery is already in flight
-  if (r.recoveryLock > Date.now()) return;
+  if (r.recoveryLock > Date.now()) {
+    console.log(`[mesh] onParentLost(${rid}) — recovery lock active, ignoring`);
+    return;
+  }
   r.recoveryLock = Date.now() + RECOVERY_LOCK_MS;
 
   const lostParentId  = r.parentId;
+  console.log(`[mesh] onParentLost(${rid}) — lost parent ${lostParentId}, grandparent=${r.grandparentId}`);
   const grandparentId = r.grandparentId;
 
   // Clear upstream state. Our children stay our children — we do NOT promote them.
@@ -369,15 +495,19 @@ export function handleParentLost(data) {
 // ─── RECOVER_PROCEDURE ────────────────────────────────────────────────────────
 function recoverProcedure(rid) {
   const r = state.rooms[rid]; if (!r) return;
+  if (r._joiningParent) {
+    console.log(`[mesh] recoverProcedure(${rid}) — skipped, join in progress`);
+    return;
+  }
 
   const myDC          = myDescendantCount(rid);
   const myDescendants = getDescendantIds(rid);
 
-  // Candidates: known peers that are not us and not our descendants
   const candidates = Object.keys(r.clusterMap).filter(pid =>
     pid !== state.myId && !myDescendants.has(pid)
   );
 
+  console.log(`[mesh] recoverProcedure(${rid}) — myDC=${myDC}, candidates: ${candidates.join(', ') || '(none)'}`);
   if (!candidates.length) { becomeRoot(rid); return; }
 
   const pending = new Set(candidates.slice(0, 5));
@@ -387,8 +517,14 @@ function recoverProcedure(rid) {
   const decide = () => {
     if (decided) return;
     decided = true;
+    // Re-check: join may have succeeded while we were waiting for responses
+    const rr = state.rooms[rid];
+    if (!rr || rr.parentId || rr.childIds.length) return;
 
-    if (!Object.keys(results).length) { becomeRoot(rid); return; }
+    if (!Object.keys(results).length) {
+      console.log(`[mesh] recoverProcedure(${rid}) decide() — no responses received, calling becomeRoot`);
+      becomeRoot(rid); return;
+    }
 
     // Find highest-priority candidate
     let bestPid = null, bestDC = -1;
@@ -401,11 +537,12 @@ function recoverProcedure(rid) {
     r.recoveryLock = Date.now() + RECOVERY_LOCK_MS;
 
     if (priorityHigherThan(bestDC, bestPid, myDC, state.myId)) {
-      // Target wins → we attach upward
+      console.log(`[mesh] recoverProcedure(${rid}) decide() — attaching to ${bestPid} (DC=${bestDC} > mine=${myDC})`);
       state.cb.connectTo?.(bestPid, conn => {
         conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
-      }, () => becomeRoot(rid));
+      }, () => setTimeout(() => findAndJoinParent(rid), RECONNECT_DELAY));
     } else {
+      console.log(`[mesh] recoverProcedure(${rid}) decide() — we win (DC=${myDC} >= best=${bestDC}), pulling ${bestPid} down`);
       // We win → pull target down, become root in the meantime
       const conn = state.peerConns[bestPid]?.conn;
       const doConnect = c => {
@@ -417,8 +554,9 @@ function recoverProcedure(rid) {
     }
   };
 
-  // Request descendant counts; decide after 2 s or when all replied
-  const collectTimer = setTimeout(decide, 2000);
+  // Request descendant counts; decide after 5 s or when all replied.
+  // 2 s was too short for TURN-relayed connections and caused spurious becomeRoot.
+  const collectTimer = setTimeout(decide, 5000);
   r._recoverCollect = (respPid, dc) => {
     results[respPid] = dc;
     pending.delete(respPid);
@@ -546,8 +684,10 @@ function rejoinCluster(rid) {
   }
   setTimeout(() => {
     const room = state.rooms[rid];
-    if (room && !room.parentId && !room.childIds.length) becomeRoot(rid);
-  }, 5000);
+    if (!room) return;
+    if (room.parentId || room.childIds.length || room._joiningParent) return;
+    becomeRoot(rid);
+  }, 12000);
 }
 
 export function attemptRoomReconnect(rid) {
@@ -555,8 +695,12 @@ export function attemptRoomReconnect(rid) {
   const toTry = r.savedPeers.filter(id =>
     id !== state.myId && !(state.peerConns[id]?.conn?.open)
   );
-  if (!toTry.length) return;
+  if (!toTry.length) {
+    console.log(`[mesh] attemptRoomReconnect(${rid}) — no savedPeers to try`);
+    return;
+  }
 
+  console.log(`[mesh] attemptRoomReconnect(${rid}) — trying ${toTry.slice(0,3).join(', ')}`);
   r.parentId         = null;
   r.parentConn       = null;
   r.grandparentId    = null;
@@ -567,25 +711,40 @@ export function attemptRoomReconnect(rid) {
     state.cb.connectTo?.(id, conn => {
       if (!gotResponse) {
         gotResponse = true;
+        console.log(`[mesh] attemptRoomReconnect(${rid}) — connected to ${id}, sending cluster_map_request`);
         conn.send({ type: 'cluster_map_request', roomId: rid, id: state.myId, name: state.myName });
       }
-    }, () => {});
+    }, () => {
+      console.log(`[mesh] attemptRoomReconnect(${rid}) — connect to ${id} failed`);
+    });
   });
 
+  // Wait long enough for a normal join (ICE + adopt) to complete before
+  // concluding we are isolated. 12 s covers TURN negotiation (up to ~10 s)
+  // plus the adopt round-trip. If _joiningParent is still set the join is
+  // actively in flight — back off and let it resolve on its own.
   setTimeout(() => {
     const room = state.rooms[rid];
     if (!room) return;
-    if (!room.parentId && !room.childIds.length) {
-      // Still isolated after 6 s — run recoverProcedure if we know any peers,
-      // otherwise officially become root.
-      const knownPeers = Object.keys(room.clusterMap).filter(pid => pid !== state.myId);
-      if (knownPeers.length) {
-        recoverProcedure(rid);
-      } else {
-        becomeRoot(rid);
-      }
+    if (room.parentId || room.childIds.length) return; // already joined
+    if (room._joiningParent) {
+      // Join still in progress — check again after another 10 s
+      setTimeout(() => {
+        const r2 = state.rooms[rid];
+        if (r2 && !r2.parentId && !r2.childIds.length && !r2._joiningParent) {
+          const kp = Object.keys(r2.clusterMap).filter(p => p !== state.myId);
+          kp.length ? recoverProcedure(rid) : becomeRoot(rid);
+        }
+      }, 10000);
+      return;
     }
-  }, 6000);
+    const knownPeers = Object.keys(room.clusterMap).filter(pid => pid !== state.myId);
+    if (knownPeers.length) {
+      recoverProcedure(rid);
+    } else {
+      becomeRoot(rid);
+    }
+  }, 12000);
 }
 
 // ─── BACKGROUND REBALANCING ───────────────────────────────────────────────────
@@ -653,11 +812,13 @@ export function broadcastClusterMap(rid) {
 
 export function handleClusterMap(data) {
   const r = state.rooms[data.roomId]; if (!r || !data.map) return;
+  const newPeers = [];
   for (const [pid, entry] of Object.entries(data.map)) {
     if (pid === state.myId) continue;
     r.clusterMap[pid] = entry;
-    if (!r.peers[pid]) r.peers[pid] = { id: pid, name: entry.name || pid };
+    if (!r.peers[pid]) { r.peers[pid] = { id: pid, name: entry.name || pid }; newPeers.push(pid); }
   }
+  console.log(`[mesh] handleClusterMap(${data.roomId}) — merged ${Object.keys(data.map).length} entries, clusterMap now has ${Object.keys(r.clusterMap).length} peers`);
   updateClusterMapSelf(data.roomId);
   if (data.roomId === state.activeRoomId) {
     import('./ui.js').then(ui => { ui.renderRoomSidebar(); ui.updatePeerCount(); });
@@ -666,11 +827,17 @@ export function handleClusterMap(data) {
 
 export function handleClusterMapRequest(data, conn) {
   const rid = data.roomId, r = state.rooms[rid]; if (!r) return;
+  console.log(`[mesh] handleClusterMapRequest(${rid}) — from ${data.name || conn.peer}, sending map with ${Object.keys(r.clusterMap).length} entries`);
   updateClusterMapSelf(rid);
-  if (!r.peers[conn.peer]) r.peers[conn.peer] = { name: data.name || conn.peer };
-  if (state.peerConns[conn.peer]) state.peerConns[conn.peer].rooms.add(rid);
+  if (!r.peers[conn.peer]) r.peers[conn.peer] = { id: conn.peer, name: data.name || conn.peer };
+  // Ensure this room is tracked in peerConns so becomeRoot's live-peer check sees it
+  if (!state.peerConns[conn.peer]) state.peerConns[conn.peer] = { conn, rooms: new Set(), lastSeen: Date.now(), scores: [] };
+  state.peerConns[conn.peer].rooms.add(rid);
+  // Send the full cluster map — this is all the joiner needs to call findAndJoinParent.
+  // Do NOT also send a handshake here; the joiner will receive handshakes naturally
+  // when the adopted parent calls setupChatConn and sendHandshake as part of adopt_ack.
+  // Sending both races with findAndJoinParent and can trigger it twice.
   conn.send({ type: 'cluster_map', roomId: rid, map: r.clusterMap });
-  state.cb.sendHandshake?.(conn, rid, r);
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────

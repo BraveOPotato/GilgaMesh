@@ -140,7 +140,7 @@ export function checkShareUrl() {
   if (token && fromId) {
     history.replaceState({}, '', location.pathname);
     const attempt = () => {
-      if (!state.peer || !state.myId) { setTimeout(attempt, 500); return; }
+      if (!state.peer?.open || !state.myId) { setTimeout(attempt, 500); return; }
       if (confirm(`Download "${name}" (${formatBytes(size)}) from a peer?\nDirect P2P transfer.`)) {
         downloadFile(token, fromId, name);
       }

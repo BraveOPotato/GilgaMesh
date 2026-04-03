@@ -137,13 +137,19 @@ export function handleChatData(data, conn) {
       break;
     case 'cluster_map':
       handleClusterMap(data);
-      // Only try to find a parent if we have no parent AND no children.
-      // If we already have children we are a root-in-progress; if we have a
-      // parent we are already placed. Calling findAndJoinParent while already
-      // having a parent was the root cause of A→B→C→A cycles.
+      // Only trigger findAndJoinParent from a cluster_map if we are genuinely
+      // unplaced AND no join is already in progress (_joiningParent).
+      // The new scout-based join (joinRoomViaInvite) calls findAndJoinParent
+      // directly after merging the map; this path handles attemptRoomReconnect
+      // and any other flow that uses the permanent connectTo path.
       if (rid) {
         const _r = state.rooms[rid];
-        if (_r && !_r.parentId && !_r.childIds.length) findAndJoinParent(rid);
+        if (_r && !_r.parentId && !_r.childIds.length && !_r._joiningParent) {
+          console.log(`[main] cluster_map(${rid}) received — triggering findAndJoinParent`);
+          findAndJoinParent(rid);
+        } else if (_r) {
+          console.log(`[main] cluster_map(${rid}) received — skipping findAndJoinParent (parent=${_r.parentId}, children=${_r.childIds.length}, joining=${_r._joiningParent})`);
+        }
       }
       break;
     case 'adopt_request':
