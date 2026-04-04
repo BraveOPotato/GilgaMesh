@@ -422,14 +422,25 @@ export function handlePeerDisconnect(pid) {
 
   for (const rid of roomsAffected) {
     const r = state.rooms[rid]; if (!r) continue;
-    delete r.clusterMap[pid];
+
     // Keep r.peers[pid] intact — the peer is offline, not forgotten.
     // renderRoomSidebar checks peerConns to determine online/offline status
     // and shows a gray dot for peers not currently connected.
 
-    if (pid === r.parentId)            onParentLost(rid);
-    else if (r.childIds.includes(pid)) onChildLost(rid, pid);
-    else if (pid === r.backupId)       { r.backupId = null; r.backupConn = null; pickBackupPeer(rid); }
+    if (pid === r.parentId) {
+      // Do NOT delete the dead parent's clusterMap entry yet.
+      // It contains sibling IDs that recoverProcedure needs as candidates.
+      // onParentLost will delete it after extracting what it needs.
+      onParentLost(rid);
+    } else if (r.childIds.includes(pid)) {
+      delete r.clusterMap[pid];
+      onChildLost(rid, pid);
+    } else if (pid === r.backupId) {
+      delete r.clusterMap[pid];
+      r.backupId = null; r.backupConn = null; pickBackupPeer(rid);
+    } else {
+      delete r.clusterMap[pid];
+    }
   }
   state.cb.renderTopology?.();
   state.cb.updateNetworkPanel?.();
@@ -446,8 +457,27 @@ function onParentLost(rid) {
   r.recoveryLock = Date.now() + RECOVERY_LOCK_MS;
 
   const lostParentId  = r.parentId;
-  console.log(`[mesh] onParentLost(${rid}) — lost parent ${lostParentId}, grandparent=${r.grandparentId}`);
   const grandparentId = r.grandparentId;
+
+  // Extract sibling IDs from the dead parent's clusterMap entry BEFORE deleting it.
+  // In a flat 2-level tree (root → B, C) the siblings have never connected directly
+  // and won't be in our clusterMap any other way. We need them as recovery candidates.
+  const deadParentEntry = r.clusterMap[lostParentId];
+  if (deadParentEntry) {
+    // The parent's own clusterMap lists all cluster members — copy any we don't know.
+    // Also preserve siblings from r.siblings which came via child_list messages.
+    const knownSiblings = new Set([...(r.siblings || [])]);
+    for (const sibId of knownSiblings) {
+      if (sibId !== state.myId && !r.clusterMap[sibId]) {
+        r.clusterMap[sibId] = { name: r.peers[sibId]?.name || sibId, distance: 1, childCount: 0, connCount: 0, descendantCount: 1 };
+        console.log(`[mesh] onParentLost(${rid}) — preserved sibling ${sibId} in clusterMap from r.siblings`);
+      }
+    }
+  }
+  // Now safe to remove the dead parent
+  delete r.clusterMap[lostParentId];
+
+  console.log(`[mesh] onParentLost(${rid}) — lost parent ${lostParentId}, grandparent=${grandparentId}, clusterMap now: ${Object.keys(r.clusterMap).filter(p=>p!==state.myId).join(', ')||'(empty)'}`);
 
   // Clear upstream state. Our children stay our children — we do NOT promote them.
   r.parentId         = null;
@@ -461,7 +491,8 @@ function onParentLost(rid) {
     import('./ui.js').then(ui => ui.setStatus('searching', 'reconnecting…'));
   }
 
-  // Notify siblings so they can run their own recovery concurrently
+  // Notify siblings so they can run their own recovery concurrently.
+  // This also gives them our ID as a candidate in case they don't have it.
   for (const sibId of (r.siblings || [])) {
     const sibConn = state.peerConns[sibId]?.conn;
     if (sibConn?.open) {
@@ -473,22 +504,40 @@ function onParentLost(rid) {
 
   // Step 1: try grandparent directly (fastest path back into the tree)
   if (grandparentId) {
+    console.log(`[mesh] onParentLost(${rid}) — trying grandparent ${grandparentId} first`);
     state.cb.connectTo?.(grandparentId, conn => {
       conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
-    }, () => recoverProcedure(rid));
+    }, () => {
+      console.log(`[mesh] onParentLost(${rid}) — grandparent unreachable, running recoverProcedure`);
+      recoverProcedure(rid);
+    });
     return;
   }
 
-  // No grandparent known → full recovery
-  recoverProcedure(rid);
+  // No grandparent → delay briefly before recoverProcedure so the sibling's
+  // connectTo (triggered by parent_lost notification) has time to establish
+  // a direct WebRTC connection before we query descendant counts.
+  const RECOVERY_DELAY_MS = 1500;
+  console.log(`[mesh] onParentLost(${rid}) — no grandparent, waiting ${RECOVERY_DELAY_MS}ms before recoverProcedure`);
+  setTimeout(() => recoverProcedure(rid), RECOVERY_DELAY_MS);
 }
 
 // A sibling told us the parent is gone. Run our own recovery.
+// Add the notifying sibling to our clusterMap as a candidate if not already there.
 export function handleParentLost(data) {
   const rid = data.roomId;
   const r   = state.rooms[rid]; if (!r) return;
   if (r.parentId !== data.lostParentId) return;
   if (r.recoveryLock > Date.now()) return;
+
+  // The sibling that notified us is a valid recovery candidate — make sure it's in the map.
+  if (data.newCandidate && data.newCandidate !== state.myId && !r.clusterMap[data.newCandidate]) {
+    r.clusterMap[data.newCandidate] = {
+      name: r.peers[data.newCandidate]?.name || data.newCandidate,
+      distance: 1, childCount: 0, connCount: 0, descendantCount: 1,
+    };
+    console.log(`[mesh] handleParentLost(${rid}) — added sibling ${data.newCandidate} to clusterMap`);
+  }
   onParentLost(rid);
 }
 
@@ -503,7 +552,14 @@ function recoverProcedure(rid) {
   const myDC          = myDescendantCount(rid);
   const myDescendants = getDescendantIds(rid);
 
-  const candidates = Object.keys(r.clusterMap).filter(pid =>
+  // Also include known siblings that may not be in clusterMap yet
+  // (they connect through the now-dead parent and may not have been broadcast)
+  const knownPeerIds = new Set([
+    ...Object.keys(r.clusterMap),
+    ...(r.siblings || []),
+    ...Object.keys(r.peers).filter(pid => state.peerConns[pid]?.conn?.open),
+  ]);
+  const candidates = [...knownPeerIds].filter(pid =>
     pid !== state.myId && !myDescendants.has(pid)
   );
 
