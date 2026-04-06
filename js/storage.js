@@ -14,6 +14,7 @@ export function loadStorage() {
       state.rooms[rid] = makeRoomShell(r.id, r.name, r.createdBy);
       state.rooms[rid].savedPeers = r.savedPeers || [];
       if (r.channels && r.channels.length) state.rooms[rid].channels = r.channels;
+      if (r.voiceChannels?.length) state.rooms[rid].voiceChannels = r.voiceChannels;
       // Restore known peers so offline members remain visible in the sidebar
       if (r.peers) {
         for (const [pid, p] of Object.entries(r.peers)) {
@@ -44,6 +45,7 @@ export function saveStorage() {
     storedRooms[rid] = {
       id: r.id, name: r.name, createdBy: r.createdBy,
       savedPeers: r.savedPeers, channels: r.channels, messages: msgs,
+      voiceChannels: r.voiceChannels || [],
       peers: peerRegistry,
     };
   }
@@ -86,6 +88,10 @@ export function makeRoomShell(id, name, createdBy) {
     electionTimer:  null,
     electionVotes:  {},
     electionEpoch:  0,
+
+    // ── Voice channels ───────────────────────────────────────────────────────
+    voiceChannels:    [],   // [{ id, name }]
+    myVoiceChannelId: null, // voice channel this node is currently in
 
     // ── Chat ─────────────────────────────────────────────────────────────────
     channels:    [

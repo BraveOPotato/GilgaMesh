@@ -18,6 +18,7 @@ import {
 } from './mesh.js';
 import { handleElectionStart, handleElectionVote, handleElectionWon, startLocalElection } from './election.js';
 import { handleIncomingMessage, handleMsgAck, addSystemMsg, displayMessage, flushPendingMessages, onTyping, handleTyping } from './messaging.js';
+import { handleVoiceChannelCreated, handleVoiceData, handleVoiceBinary, handleBecomeMyChild, handleVoiceEvictChildren } from './voice.js';
 import { handleChannelCreated, switchChannel, createRoom, createChannel, joinRoomViaInvite,
          confirmLeaveRoom, leaveRoom, showInvite, copyInviteLink, checkJoinUrl,
          backToRooms, switchRoom, handlePeerLeaving } from './rooms.js';
@@ -30,6 +31,7 @@ import {
   toggleSidebar, closeSidebar, openNetPanel, closeNetPanel,
   handleMentionInput, moveMentionSelection, confirmMention, closeMentionPopup,
   renderMentionText,
+  openCallView, closeCallView,
 } from './ui.js';
 import { copyToClipboard, escapeHtml } from './utils.js';
 import { SCORE_WINDOW } from './constants.js';
@@ -236,6 +238,20 @@ export function handleChatData(data, conn) {
     case 'peer_leaving':
       handlePeerLeaving(data);
       break;
+
+    // ── Voice ──────────────────────────────────────────────────────────────
+    case 'voice_channel_created':
+      if (rid) handleVoiceChannelCreated(rid, data);
+      break;
+    case 'voice_data':
+      if (rid) handleVoiceData(data, conn);
+      break;
+    case 'become_my_child':
+      if (rid) handleBecomeMyChild(data, conn);
+      break;
+    case 'voice_evict_children':
+      if (rid) handleVoiceEvictChildren(data);
+      break;
   }
 }
 
@@ -261,8 +277,9 @@ function handleHandshakeMsg(data, conn) {
       name:            data.name || pid,
       distance:        data.distanceFromRoot,
       connCount:       data.childCount || 0,
-      childCount:      data.childCount || 0,   // explicit field for capacity math
+      childCount:      data.childCount || 0,
       descendantCount: data.descendantCount || 0,
+      voiceChannelId:  data.voiceChannelId || null,
     };
   }
 
@@ -366,6 +383,18 @@ Object.assign(window, {
   manualConnect,
   triggerFileShare,
   _gmDownloadFile: (token, fromId, name) => downloadFile(token, fromId, name),
+  _gmJoinVoice: (rid, vcId) => import('./voice.js').then(v => v.joinVoiceChannel(rid, vcId)),
+  _gmLeaveVoice: (rid) => import('./voice.js').then(v => { v.leaveVoiceChannel(rid); closeCallView(); }),
+  _gmToggleMute: (rid) => import('./voice.js').then(v => v.toggleMute(rid)),
+  _gmToggleDeafen: (rid) => import('./voice.js').then(v => v.toggleDeafen(rid)),
+  _gmToggleCallView: (rid, vcId) => {
+    const cv = document.getElementById('call-view');
+    if (cv && cv.dataset.vcId === vcId) { closeCallView(); } else { openCallView(rid, vcId); }
+  },
+  _gmCloseCallView: () => closeCallView(),
+  _gmRefreshCallControls: (rid, vcId) => import('./ui.js').then(ui => ui.openCallView(rid, vcId)),
+  _gmCreateVoiceChannel: (rid) => import('./voice.js').then(v => v.createVoiceChannel(rid)),
+  _gmActiveRoomId: () => state.activeRoomId,
   copyShareLink,
   _gmCopyText: btn => copyText(btn),
   openManageCandidates: () => {

@@ -74,19 +74,23 @@ function parentScore(entry) {
 }
 
 // ─── JOIN CLUSTER ─────────────────────────────────────────────────────────────
-export function findAndJoinParent(rid) {
+export function findAndJoinParent(rid, { force = false, excludeIds = [] } = {}) {
   const r = state.rooms[rid]; if (!r) return;
   if (r.parentId || r.childIds.length) {
     console.log(`[mesh] findAndJoinParent(${rid}) skipped — already placed (parent=${r.parentId}, children=${r.childIds.length})`);
     return;
   }
-  if (r._joiningParent) {
+  if (r._joiningParent && !force) {
     console.log(`[mesh] findAndJoinParent(${rid}) skipped — join already in progress`);
     return;
   }
   r._joiningParent = true;
 
-  const mapEntries = Object.entries(r.clusterMap).filter(([p]) => p !== state.myId);
+  const excludeSet = new Set(excludeIds);
+  const mapEntries = Object.entries(r.clusterMap).filter(([p]) => p !== state.myId && !excludeSet.has(p));
+  if (excludeSet.size) {
+    console.log(`[mesh] findAndJoinParent(${rid}) — excluding recently-evicted peers: ${[...excludeSet].join(', ')}`);
+  }
   console.log(`[mesh] findAndJoinParent(${rid}) — clusterMap has ${mapEntries.length} peers:`,
     mapEntries.map(([p, e]) => `${e.name||p}(dist=${e.distance},children=${e.childCount??e.connCount??'?'})`).join(', ') || '(none)');
 
@@ -98,9 +102,19 @@ export function findAndJoinParent(rid) {
     .sort(([, a], [, b]) => parentScore(b) - parentScore(a))
     .map(([pid]) => pid);
 
-  console.log(`[mesh] findAndJoinParent(${rid}) — ${candidates.length} eligible candidates:`, candidates.join(', ') || '(none)');
+  // Voice-aware sort: same channel first, then non-voice nodes, then other-channel nodes
+  const myVcId = r.myVoiceChannelId || null;
+  const sortedCandidates = myVcId ? candidates.sort((a, b) => {
+    const aVc = r.clusterMap[a]?.voiceChannelId || null;
+    const bVc = r.clusterMap[b]?.voiceChannelId || null;
+    const aScore = aVc === myVcId ? 0 : (aVc === null ? 1 : 2);
+    const bScore = bVc === myVcId ? 0 : (bVc === null ? 1 : 2);
+    return aScore - bScore;
+  }) : candidates;
 
-  if (!candidates.length) {
+  console.log(`[mesh] findAndJoinParent(${rid}) — ${sortedCandidates.length} eligible candidates (voice=${myVcId||'none'}):`, sortedCandidates.join(', ') || '(none)');
+
+  if (!sortedCandidates.length) {
     r._joiningParent = false;
     // Explain exactly why each map entry was rejected
     const rejections = mapEntries.map(([pid, e]) => {
@@ -110,7 +124,7 @@ export function findAndJoinParent(rid) {
     console.log(`[mesh] findAndJoinParent(${rid}) — NO ELIGIBLE CANDIDATES. Rejections:`, rejections.join(' | ') || '(clusterMap was empty)');
     becomeRoot(rid); return;
   }
-  tryParentCandidates(rid, candidates, 0);
+  tryParentCandidates(rid, sortedCandidates, 0);
 }
 
 function tryParentCandidates(rid, candidates, idx) {
@@ -143,7 +157,7 @@ function tryParentCandidates(rid, candidates, idx) {
       rr._joiningParent = false; return;
     }
     console.log(`[mesh] tryParentCandidates(${rid}) — connected to ${pid}, sending adopt_request`);
-    conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
+    conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName, voiceChannelId: state.rooms[rid]?.myVoiceChannelId || null });
   }, () => {
     console.log(`[mesh] tryParentCandidates(${rid}) — connect to ${pid} failed, trying next`);
     setTimeout(() => tryParentCandidates(rid, candidates, idx + 1), RECONNECT_DELAY);
@@ -283,6 +297,39 @@ export function handleAdoptRequest(data, conn) {
   }
 
   console.log(`[mesh] handleAdoptRequest(${rid}) — accepting ${pid} as child (now ${r.childIds.length + 1} children)`);
+  // Voice affinity check — voice nodes only accept same-channel children
+  const requesterVcId = data.voiceChannelId || null;
+  import('./voice.js').then(voice => {
+    const affinity = voice.checkVoiceAdoptAffinity(rid, requesterVcId, conn);
+    if (!affinity.allow) {
+      console.log(`[mesh] handleAdoptRequest(${rid}) — voice affinity mismatch (${affinity.reason}), redirecting to ${affinity.redirectTo || '(none)'}`);
+      conn.send({ type: 'adopt_redirect', roomId: rid, targetId: affinity.redirectTo });
+      return;
+    }
+    _doAddChild(rid, pid, conn, data);
+  });
+}
+
+// Internal: complete adoption after voice affinity check passes
+function _doAddChild(rid, pid, conn, data) {
+  const r = state.rooms[rid]; if (!r) return;
+  // Re-check limit (async path — state may have changed)
+  const limit = r.recoveryLock > Date.now() ? HARD_CHILD_LIMIT : SOFT_CHILD_LIMIT;
+  if (r.childIds.length >= limit) {
+    const available = Object.entries(r.clusterMap)
+      .filter(([p, e]) => {
+        if (p === state.myId || p === conn.peer) return false;
+        const children = e.childCount ?? Math.max(0, e.connCount - (e.distance === 0 ? 0 : 1));
+        return children < SOFT_CHILD_LIMIT;
+      })
+      .sort(([, a], [, b]) => {
+        if (a.distance !== b.distance) return a.distance - b.distance;
+        return (a.childCount ?? a.connCount) - (b.childCount ?? b.connCount);
+      });
+    conn.send({ type: 'adopt_redirect', roomId: rid, targetId: available[0]?.[0] ?? null });
+    return;
+  }
+
   addChild(rid, pid, conn);
   updateClusterMapSelf(rid); // must happen before adopt_ack so child gets accurate childCount
   conn.send({
@@ -294,6 +341,7 @@ export function handleAdoptRequest(data, conn) {
     clusterMap:       r.clusterMap,
     siblings:         r.childIds.filter(id => id !== pid),
     electionEpoch:    r.electionEpoch,
+    voiceChannels:    r.voiceChannels || [],   // propagate voice channel definitions
   });
   broadcastChildList(rid);
   broadcastClusterMap(rid);
@@ -328,6 +376,13 @@ export function handleAdoptAck(data, conn) {
       }
     }
   }
+  // Merge voice channel definitions — joiner learns which voice channels exist
+  if (data.voiceChannels?.length) {
+    if (!r.voiceChannels) r.voiceChannels = [];
+    for (const vc of data.voiceChannels) {
+      if (!r.voiceChannels.find(v => v.id === vc.id)) r.voiceChannels.push(vc);
+    }
+  }
   updateClusterMapSelf(rid);
   // Push our accurate entry up to the parent immediately — this ensures the
   // parent (and root) know our real childCount before any subsequent node
@@ -358,7 +413,7 @@ export function handleAdoptRedirect(data) {
     return;
   }
   state.cb.connectTo?.(data.targetId, conn => {
-    conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
+    conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName, voiceChannelId: state.rooms[rid]?.myVoiceChannelId || null });
   }, () => {
     // Connect to redirect target failed — retry the full candidate search
     setTimeout(() => findAndJoinParent(rid), RECONNECT_DELAY);
@@ -447,6 +502,17 @@ export function handlePeerDisconnect(pid) {
 }
 
 // ─── PARENT LOST ─────────────────────────────────────────────────────────────
+// Public wrapper so voice.js can trigger recovery without a circular import at load time
+export function onParentLostPublic(rid, expectedParentId) {
+  const r = state.rooms[rid]; if (!r) return;
+  // Only trigger if expectedParentId is still our parent (guard against stale calls)
+  if (expectedParentId && r.parentId !== expectedParentId) {
+    console.log(`[mesh] onParentLostPublic(${rid}) — skipped, parentId is ${r.parentId} not ${expectedParentId}`);
+    return;
+  }
+  onParentLost(rid);
+}
+
 function onParentLost(rid) {
   const r = state.rooms[rid]; if (!r) return;
 
@@ -506,7 +572,7 @@ function onParentLost(rid) {
   if (grandparentId) {
     console.log(`[mesh] onParentLost(${rid}) — trying grandparent ${grandparentId} first`);
     state.cb.connectTo?.(grandparentId, conn => {
-      conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
+      conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName, voiceChannelId: state.rooms[rid]?.myVoiceChannelId || null });
     }, () => {
       console.log(`[mesh] onParentLost(${rid}) — grandparent unreachable, running recoverProcedure`);
       recoverProcedure(rid);
@@ -595,7 +661,7 @@ function recoverProcedure(rid) {
     if (priorityHigherThan(bestDC, bestPid, myDC, state.myId)) {
       console.log(`[mesh] recoverProcedure(${rid}) decide() — attaching to ${bestPid} (DC=${bestDC} > mine=${myDC})`);
       state.cb.connectTo?.(bestPid, conn => {
-        conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
+        conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName, voiceChannelId: state.rooms[rid]?.myVoiceChannelId || null });
       }, () => setTimeout(() => findAndJoinParent(rid), RECONNECT_DELAY));
     } else {
       console.log(`[mesh] recoverProcedure(${rid}) decide() — we win (DC=${myDC} >= best=${bestDC}), pulling ${bestPid} down`);
@@ -659,7 +725,7 @@ export function handleConnectToMe(data) {
   const rid = data.roomId, r = state.rooms[rid]; if (!r) return;
   if (r.recoveryLock > Date.now()) return;
   state.cb.connectTo?.(data.id, conn => {
-    conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
+    conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName, voiceChannelId: state.rooms[rid]?.myVoiceChannelId || null });
   }, () => {});
 }
 
@@ -701,7 +767,7 @@ export function handleReassignParent(data) {
   const rid = data.roomId, r = state.rooms[rid]; if (!r) return;
   if (r.recoveryLock > Date.now()) return;
   state.cb.connectTo?.(data.newParentId, conn => {
-    conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
+    conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName, voiceChannelId: state.rooms[rid]?.myVoiceChannelId || null });
   }, () => {});
 }
 
@@ -836,7 +902,7 @@ function doRebalance(rid) {
 
   if (priorityHigherThan(targetDC, bestPid, myDC, state.myId)) {
     state.cb.connectTo?.(bestPid, conn => {
-      conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
+      conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName, voiceChannelId: state.rooms[rid]?.myVoiceChannelId || null });
     }, () => { r.recoveryLock = 0; });
   } else {
     const conn = state.peerConns[bestPid]?.conn;
@@ -849,12 +915,19 @@ function doRebalance(rid) {
 // ─── CLUSTER MAP ─────────────────────────────────────────────────────────────
 export function updateClusterMapSelf(rid) {
   const r = state.rooms[rid]; if (!r) return;
+  const vcId = r.myVoiceChannelId || null;
+  // voiceSubtree: true if every child is also in the same voice channel
+  const voiceSubtree = vcId !== null && r.childIds.every(cid =>
+    r.clusterMap[cid]?.voiceChannelId === vcId
+  );
   r.clusterMap[state.myId] = {
     name:            state.myName,
     distance:        r.distanceFromRoot,
-    connCount:       totalConnCount(rid),   // kept for legacy/display
-    childCount:      r.childIds.length,     // explicit child count for capacity checks
+    connCount:       totalConnCount(rid),
+    childCount:      r.childIds.length,
     descendantCount: myDescendantCount(rid),
+    voiceChannelId:  vcId,
+    voiceSubtree:    voiceSubtree,
   };
 }
 

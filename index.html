@@ -100,6 +100,18 @@ html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 .peer-status-dot { position:absolute; bottom:-1px; right:-1px; width:8px; height:8px; border-radius:50%; border:2px solid var(--bg-deep); background:var(--text-muted); }
 .peer-status-dot.online { background:var(--green); }
 .peer-status-dot.server { background:var(--amber); }
+.voice-channel-item { flex-wrap:wrap; }
+.icon-btn-xs { background:none; border:none; cursor:pointer; font-size:12px; padding:2px 4px; border-radius:4px; opacity:.65; color:var(--text-secondary); line-height:1; flex-shrink:0; }
+.icon-btn-xs:hover { opacity:1; background:var(--bg-hover); }
+.vc-participants-list { width:100%; padding:2px 8px 4px 28px; display:flex; flex-direction:column; gap:2px; }
+.vc-participant { display:flex; align-items:center; gap:6px; padding:2px 4px; border-radius:var(--radius-sm); transition:background .1s; }
+.vc-participant.vc-speaking { background:var(--bg-hover); }
+.vc-peer-avatar { width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; flex-shrink:0; border:1.5px solid transparent; transition:box-shadow .15s, border-color .15s; }
+.vc-peer-avatar.vc-speaking-glow { box-shadow:0 0 0 2px var(--green), 0 0 8px var(--green); border-color:var(--green) !important; animation:vc-pulse 1.2s ease-in-out infinite; }
+@keyframes vc-pulse { 0%,100%{box-shadow:0 0 0 2px var(--green),0 0 6px var(--green);} 50%{box-shadow:0 0 0 3px var(--green),0 0 14px var(--green);} }
+.vc-peer-name { font-size:11px; color:var(--text-secondary); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vc-speaking-dot { width:6px; height:6px; border-radius:50%; background:var(--green); flex-shrink:0; animation:vc-pulse-dot .8s ease-in-out infinite; }
+@keyframes vc-pulse-dot { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.5;transform:scale(.7);} }
 .peer-name { font-size:12px; color:var(--text-secondary); flex:1; overflow:hidden; text-overflow:ellipsis; }
 .peer-role { font-size:10px; font-family:var(--mono); color:var(--accent); opacity:.8; flex-shrink:0; }
 .divider { height:1px; background:var(--border); margin:3px 7px; }
@@ -282,6 +294,27 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
 .mention    { color:var(--accent); background:var(--accent-glow); border-radius:3px; padding:0 2px; font-weight:500; cursor:default; }
 .mention-me { color:var(--amber); background:rgba(245,166,35,0.12); }
 
+/* ── CALL VIEW ── */
+#call-view { display:flex; flex-direction:column; flex:1; min-height:0; background:var(--bg-surface); animation:fade-in .18s ease; }
+.call-view-header { display:flex; align-items:center; gap:8px; padding:12px 16px; border-bottom:1px solid var(--border); flex-shrink:0; background:var(--bg-deep); }
+.call-view-icon  { font-size:16px; }
+.call-view-title { font-size:15px; font-weight:700; letter-spacing:-.01em; }
+.call-view-count { font-size:12px; color:var(--text-muted); margin-left:4px; }
+.call-view-close { margin-left:auto; font-size:12px; padding:4px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); }
+.call-tiles-grid { flex:1; display:flex; flex-wrap:wrap; gap:16px; padding:24px; align-content:center; justify-content:center; overflow-y:auto; min-height:0; }
+.call-tile { display:flex; flex-direction:column; align-items:center; gap:8px; padding:20px; background:var(--bg-raised); border:2px solid var(--border); border-radius:var(--radius-lg); min-width:120px; max-width:180px; flex:1; transition:border-color .15s,background .15s; }
+.call-tile.call-tile-speaking { border-color:var(--green); background:rgba(61,220,132,0.05); }
+.call-tile-avatar { width:64px; height:64px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:24px; font-weight:700; transition:box-shadow .15s,border-color .15s; }
+.call-tile-name { font-size:13px; font-weight:500; color:var(--text-primary); text-align:center; }
+.call-tile-speaking-badge { font-size:10px; color:var(--green); font-family:var(--mono); animation:vc-pulse-dot .8s ease-in-out infinite; }
+.call-empty { color:var(--text-muted); font-size:13px; text-align:center; padding:40px; }
+.call-controls { display:flex; gap:10px; justify-content:center; padding:14px 16px; border-top:1px solid var(--border); flex-shrink:0; background:var(--bg-deep); }
+.call-ctrl-btn { display:flex; align-items:center; gap:6px; padding:8px 18px; border-radius:var(--radius); border:1px solid var(--border); background:var(--bg-raised); color:var(--text-primary); font-size:13px; font-family:var(--font); cursor:pointer; font-weight:500; transition:all .15s; }
+.call-ctrl-btn:hover { border-color:var(--border-accent); background:var(--bg-hover); }
+.call-ctrl-btn.active-red { border-color:rgba(255,77,106,.4); background:var(--red-dim); color:var(--red); }
+.call-ctrl-btn.danger { border-color:rgba(255,77,106,.35); color:var(--red); }
+.call-ctrl-btn.danger:hover { background:var(--red-dim); }
+
 /* ── MISC ── */
 .hidden { display:none !important; }
 ::-webkit-scrollbar { width:4px; }
@@ -340,6 +373,9 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
     <div id="channels-section">
       <div class="section-label">Channels <button onclick="showAddChannel()" title="New channel">+</button></div>
       <div id="channels-list"></div>
+      <div class="divider"></div>
+      <div class="section-label">Voice <button id="add-voice-btn" title="New voice channel">+</button></div>
+      <div id="voice-channels-list"></div>
       <div class="divider"></div>
       <div class="section-label">Members</div>
       <div id="peers-list"></div>
@@ -407,7 +443,6 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
       <div class="net-stat"><span class="net-stat-label">Role</span><span class="net-stat-value" id="net-role">—</span></div>
       <div class="net-stat"><span class="net-stat-label">Members</span><span class="net-stat-value" id="net-peers">0</span></div>
       <div class="net-stat"><span class="net-stat-label">Known</span><span class="net-stat-value" id="net-known" title="">0</span></div>
-      <div class="net-stat"><span class="net-stat-label">Backup</span><span class="net-stat-value" id="net-backup" title="" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</span></div>
       <div class="net-stat"><span class="net-stat-label">Latency</span><span class="net-stat-value" id="net-latency">— ms</span></div>
     </div>
     <div class="cands-header">
@@ -534,5 +569,13 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
 
 <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
 <script type="module" src="js/main.js"></script>
+<script>
+// Wire add-voice-btn dynamically (needs activeRoomId at click time)
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('add-voice-btn').onclick = () => {
+    if (window._gmCreateVoiceChannel) window._gmCreateVoiceChannel(window._gmActiveRoomId?.());
+  };
+});
+</script>
 </body>
 </html>

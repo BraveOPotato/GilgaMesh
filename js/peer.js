@@ -206,6 +206,7 @@ export function sendHandshake(conn, rid, r) {
       childCount:       r.childIds.length,
       electionEpoch:    r.electionEpoch,
       clusterMap:       r.clusterMap,
+      voiceChannelId:   r.myVoiceChannelId || null,
     });
   } catch {}
 }

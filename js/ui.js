@@ -118,6 +118,66 @@ export function renderRoomSidebar() {
     </div>`;
   }).join('');
 
+  // ── Voice channels ──────────────────────────────────────────────────────
+  const vcSection = document.getElementById('voice-channels-list');
+  if (vcSection) {
+    const myVcId = r.myVoiceChannelId || null;
+    vcSection.innerHTML = (r.voiceChannels || []).map(vc => {
+      const activeSpeakers = r.activeSpeakers || {};
+      const allParticipants = [
+        ...(myVcId === vc.id ? [{ id: state.myId, name: state.myName, isSelf: true }] : []),
+        ...Object.entries(r.clusterMap)
+          .filter(([pid, e]) => e.voiceChannelId === vc.id && pid !== state.myId)
+          .map(([pid, e]) => ({ id: pid, name: e.name || pid, isSelf: false })),
+      ];
+      const inChannel = myVcId === vc.id;
+      const participantRows = allParticipants.map(p => {
+        const speaking = !!activeSpeakers[p.id];
+        const color    = stringToColor(p.id);
+        return `<div class="vc-participant${speaking ? ' vc-speaking' : ''}" id="vc-peer-${vc.id}-${p.id}">
+          <div class="vc-peer-avatar${speaking ? ' vc-speaking-glow' : ''}" style="background:${color}22;border-color:${color}${speaking ? '' : '44'};color:${color}">
+            ${(p.name||'?').charAt(0).toUpperCase()}
+          </div>
+          <span class="vc-peer-name">${escapeHtml(p.name)}${p.isSelf ? ' (you)' : ''}</span>
+          ${speaking ? '<span class="vc-speaking-dot"></span>' : ''}
+        </div>`;
+      }).join('');
+
+      // Click behaviour:
+      //  - Not in channel → join on click
+      //  - In channel → toggle full call view on click; controls shown inline
+      const clickHandler = inChannel
+        ? `window._gmToggleCallView('${state.activeRoomId}','${vc.id}')`
+        : `window._gmJoinVoice('${state.activeRoomId}','${vc.id}')`;
+
+      return `<div class="channel-item voice-channel-item ${inChannel ? 'active' : ''}" id="vc-item-${vc.id}" onclick="${clickHandler}" title="${inChannel ? 'Click to open call view' : 'Click to join voice'}">
+        <span class="ch-icon">🔊</span>
+        <span class="ch-name" style="flex:1">${escapeHtml(vc.name)}</span>
+        ${inChannel
+          ? `<span style="display:flex;gap:3px;align-items:center" onclick="event.stopPropagation()">
+               <button class="vc-mute-btn icon-btn-xs" id="vc-mute-${vc.id}" onclick="window._gmToggleMute('${state.activeRoomId}')" title="Mute/Unmute">🎤</button>
+               <button class="vc-deafen-btn icon-btn-xs" id="vc-deafen-${vc.id}" onclick="window._gmToggleDeafen('${state.activeRoomId}')" title="Deafen/Undeafen">🔊</button>
+               <button class="icon-btn-xs" style="color:var(--red)" onclick="window._gmLeaveVoice('${state.activeRoomId}')" title="Leave voice">✕</button>
+             </span>`
+          : `<span class="vc-join-hint" style="font-size:10px;color:var(--text-muted);opacity:0">${allParticipants.length ? allParticipants.length + ' in call' : 'empty'}</span>`
+        }
+      </div>
+      ${allParticipants.length ? `<div class="vc-participants-list">${participantRows}</div>` : ''}`;
+    }).join('');
+
+    // Update mute/deafen button states after render
+    if (myVcId) {
+      import('./voice.js').then(v => {
+        const muted    = v.isMuted();
+        const deafened = v.isDeafened();
+        const muteBtn   = document.getElementById('vc-mute-'   + myVcId);
+        const deafenBtn = document.getElementById('vc-deafen-' + myVcId);
+        if (muteBtn)   muteBtn.textContent   = muted    ? '🔇' : '🎤';
+        if (deafenBtn) deafenBtn.textContent = deafened ? '🔕' : '🔊';
+      });
+    }
+  }
+
   const myColor = stringToColor(state.myId || '');
   const isRoot  = roomIsRoot(state.activeRoomId);
   const myEntry = `<div class="peer-item">
@@ -129,20 +189,26 @@ export function renderRoomSidebar() {
     ${isRoot ? '<span class="peer-role">root</span>' : ''}
   </div>`;
 
-  document.getElementById('peers-list').innerHTML = myEntry + Object.values(r.peers).map(p => {
-    const pc    = state.peerConns[p.id];
-    const alive = pc?.conn?.open;
+  document.getElementById('peers-list').innerHTML = myEntry + Object.values(r.peers).sort((a, b) => {
+    const aOnline = !!(state.peerConns[a.id]?.conn?.open);
+    const bOnline = !!(state.peerConns[b.id]?.conn?.open);
+    if (aOnline !== bOnline) return bOnline ? 1 : -1; // online first
+    return (a.name || a.id).localeCompare(b.name || b.id);
+  }).map(p => {
+    const pc       = state.peerConns[p.id];
+    const alive    = !!(pc?.conn?.open);
     const isParent = p.id === r.parentId;
     const isChild  = r.childIds.includes(p.id);
     const color    = stringToColor(p.id);
-    const role     = isParent ? 'parent' : isChild ? 'child' : 'peer';
-    return `<div class="peer-item">
-      <div class="peer-avatar" style="background:${color}20;border-color:${color}40;color:${color}">
+    const role     = isParent ? 'parent' : isChild ? 'child' : '';
+    const dotClass = isParent ? 'server' : alive ? 'online' : 'offline';
+    return `<div class="peer-item${alive ? '' : ' peer-offline'}">
+      <div class="peer-avatar" style="background:${color}20;border-color:${color}${alive ? '40' : '20'};color:${color}${alive ? '' : ';opacity:.5'}">
         ${(p.name || 'P').charAt(0).toUpperCase()}
-        <div class="peer-status-dot ${isParent ? 'server' : alive ? 'online' : ''}"></div>
+        <div class="peer-status-dot ${dotClass}"></div>
       </div>
-      <span class="peer-name">${escapeHtml(p.name || p.id)}</span>
-      <span class="peer-role">${role}</span>
+      <span class="peer-name" style="${alive ? '' : 'opacity:.45'}">${escapeHtml(p.name || p.id)}</span>
+      ${role ? `<span class="peer-role">${role}</span>` : ''}
     </div>`;
   }).join('');
 }
@@ -154,8 +220,10 @@ export function updateSidebar() {
 export function updatePeerCount() {
   if (!state.activeRoomId) { document.getElementById('peer-count-text').textContent = ''; return; }
   const r = state.rooms[state.activeRoomId]; if (!r) return;
-  const n = Object.keys(r.peers).filter(pid => state.peerConns[pid]?.conn?.open).length;
-  document.getElementById('peer-count-text').textContent = (n + 1) + ' members';
+  const total  = Object.keys(r.peers).length + 1; // +1 for self
+  const online = Object.keys(r.peers).filter(pid => state.peerConns[pid]?.conn?.open).length + 1;
+  document.getElementById('peer-count-text').textContent =
+    online === total ? `${total} members` : `${online}/${total} online`;
 }
 
 // ─── MESSAGES ─────────────────────────────────────────────────────────────────
@@ -376,6 +444,160 @@ function updateChildrenPanel(rid, r) {
       <span class="cand-score">${rtt}</span>
     </div>`;
   }).join('');
+}
+
+export function renderVoicePanel(rid) {
+  // Re-render sidebar voice section to reflect mute/deafen state changes
+  renderRoomSidebar();
+  // If call view is open, refresh it too
+  if (document.getElementById('call-view')?.dataset.vcId) {
+    const vcId = document.getElementById('call-view').dataset.vcId;
+    _refreshCallView(rid, vcId);
+  }
+}
+
+// ─── CALL VIEW (full-screen call overlay replacing message area) ──────────────
+let _callViewRid  = null;
+let _callViewVcId = null;
+
+export function openCallView(rid, vcId) {
+  _callViewRid  = rid;
+  _callViewVcId = vcId;
+  const main = document.getElementById('main');
+
+  // Hide chat UI
+  document.getElementById('messages').style.display   = 'none';
+  document.getElementById('input-area').style.display = 'none';
+  const typingRow = document.querySelector('#main > div:has(#typing-indicator)');
+  if (typingRow) typingRow.style.display = 'none';
+
+  // Create or reuse call view container
+  let cv = document.getElementById('call-view');
+  if (!cv) {
+    cv = document.createElement('div');
+    cv.id = 'call-view';
+    main.appendChild(cv);
+  }
+  cv.dataset.vcId = vcId;
+  cv.dataset.rid  = rid;
+  _refreshCallView(rid, vcId);
+}
+
+export function closeCallView() {
+  _callViewRid  = null;
+  _callViewVcId = null;
+  const cv = document.getElementById('call-view');
+  if (cv) cv.remove();
+  document.getElementById('messages').style.display   = '';
+  document.getElementById('input-area').style.display = '';
+  const typingRow = document.querySelector('#main > div:has(#typing-indicator)');
+  if (typingRow) typingRow.style.display = '';
+}
+
+function _refreshCallView(rid, vcId) {
+  const cv = document.getElementById('call-view'); if (!cv) return;
+  const r  = state.rooms[rid]; if (!r) return;
+  const vc = r.voiceChannels?.find(v => v.id === vcId);
+  const activeSpeakers = r.activeSpeakers || {};
+
+  const allParticipants = [
+    ...(r.myVoiceChannelId === vcId ? [{ id: state.myId, name: state.myName, isSelf: true }] : []),
+    ...Object.entries(r.clusterMap)
+      .filter(([pid, e]) => e.voiceChannelId === vcId && pid !== state.myId)
+      .map(([pid, e]) => ({ id: pid, name: e.name || pid, isSelf: false })),
+  ];
+
+  import('./voice.js').then(v => {
+    const muted    = v.isMuted();
+    const deafened = v.isDeafened();
+
+    const tileHtml = allParticipants.map(p => {
+      const speaking = !!activeSpeakers[p.id];
+      const color    = stringToColor(p.id);
+      return `<div class="call-tile${speaking ? ' call-tile-speaking' : ''}" id="calltile-${p.id}">
+        <div class="call-tile-avatar${speaking ? ' vc-speaking-glow' : ''}" style="background:${color}22;border:2px solid ${color}${speaking ? '' : '44'};color:${color}">
+          ${(p.name||'?').charAt(0).toUpperCase()}
+        </div>
+        <div class="call-tile-name">${escapeHtml(p.name)}${p.isSelf ? ' (you)' : ''}</div>
+        ${speaking ? '<div class="call-tile-speaking-badge">● speaking</div>' : ''}
+      </div>`;
+    }).join('');
+
+    cv.innerHTML = `
+      <div class="call-view-header">
+        <span class="call-view-icon">🔊</span>
+        <span class="call-view-title">${escapeHtml(vc?.name || vcId)}</span>
+        <span class="call-view-count">${allParticipants.length} participant${allParticipants.length !== 1 ? 's' : ''}</span>
+        <button class="call-view-close icon-btn" onclick="window._gmCloseCallView()" title="Back to chat">✕ Close</button>
+      </div>
+      <div class="call-tiles-grid">${tileHtml || '<div class="call-empty">No one else in this channel yet</div>'}</div>
+      <div class="call-controls">
+        <button class="call-ctrl-btn${muted ? ' active-red' : ''}" id="call-mute-btn"
+          onclick="window._gmToggleMute('${rid}');window._gmRefreshCallControls('${rid}','${vcId}')" title="${muted ? 'Unmute' : 'Mute'}">
+          ${muted ? '🔇' : '🎤'} ${muted ? 'Unmuted' : 'Mute'}
+        </button>
+        <button class="call-ctrl-btn${deafened ? ' active-red' : ''}" id="call-deafen-btn"
+          onclick="window._gmToggleDeafen('${rid}');window._gmRefreshCallControls('${rid}','${vcId}')" title="${deafened ? 'Undeafen' : 'Deafen'}">
+          ${deafened ? '🔕' : '🔊'} ${deafened ? 'Undeafen' : 'Deafen'}
+        </button>
+        <button class="call-ctrl-btn danger" onclick="window._gmLeaveVoice('${rid}');window._gmCloseCallView()" title="Leave call">
+          📵 Leave
+        </button>
+      </div>`;
+  });
+}
+
+export function renderVoiceSpeakers(rid) {
+  const r = state.rooms[rid]; if (!r) return;
+  const activeSpeakers = r.activeSpeakers || {};
+
+  // Update sidebar participant rows
+  for (const vc of (r.voiceChannels || [])) {
+    const allPids = [
+      ...(r.myVoiceChannelId === vc.id ? [state.myId] : []),
+      ...Object.keys(r.clusterMap).filter(pid => r.clusterMap[pid]?.voiceChannelId === vc.id && pid !== state.myId),
+    ];
+    for (const pid of allPids) {
+      const row    = document.getElementById(`vc-peer-${vc.id}-${pid}`);
+      const avatar = row?.querySelector('.vc-peer-avatar');
+      const dot    = row?.querySelector('.vc-speaking-dot');
+      const speaking = !!activeSpeakers[pid];
+      if (row)    row.classList.toggle('vc-speaking', speaking);
+      if (avatar) avatar.classList.toggle('vc-speaking-glow', speaking);
+      if (speaking && !dot) {
+        const d = document.createElement('span');
+        d.className = 'vc-speaking-dot';
+        row?.appendChild(d);
+      } else if (!speaking && dot) {
+        dot.remove();
+      }
+    }
+  }
+
+  // Update call view tiles if open for this room
+  const cv = document.getElementById('call-view');
+  if (cv && cv.dataset.rid === rid) {
+    const vcId = cv.dataset.vcId;
+    const allPids = [
+      ...(r.myVoiceChannelId === vcId ? [state.myId] : []),
+      ...Object.keys(r.clusterMap).filter(pid => r.clusterMap[pid]?.voiceChannelId === vcId && pid !== state.myId),
+    ];
+    for (const pid of allPids) {
+      const tile   = document.getElementById('calltile-' + pid);
+      const avatar = tile?.querySelector('.call-tile-avatar');
+      const badge  = tile?.querySelector('.call-tile-speaking-badge');
+      const speaking = !!activeSpeakers[pid];
+      if (tile)   tile.classList.toggle('call-tile-speaking', speaking);
+      if (avatar) avatar.classList.toggle('vc-speaking-glow', speaking);
+      if (speaking && !badge) {
+        const b = document.createElement('div');
+        b.className = 'call-tile-speaking-badge'; b.textContent = '● speaking';
+        tile?.appendChild(b);
+      } else if (!speaking && badge) {
+        badge.remove();
+      }
+    }
+  }
 }
 
 export function updateLatencyDisplay() {
