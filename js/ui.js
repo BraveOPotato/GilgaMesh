@@ -514,12 +514,18 @@ function _refreshCallView(rid, vcId) {
     const tileHtml = allParticipants.map(p => {
       const speaking = !!activeSpeakers[p.id];
       const color    = stringToColor(p.id);
-      return `<div class="call-tile${speaking ? ' call-tile-speaking' : ''}" id="calltile-${p.id}">
-        <div class="call-tile-avatar${speaking ? ' vc-speaking-glow' : ''}" style="background:${color}22;border:2px solid ${color}${speaking ? '' : '44'};color:${color}">
-          ${(p.name||'?').charAt(0).toUpperCase()}
+      return `<div class="call-tile${speaking ? ' call-tile-speaking' : ''}" id="calltile-${p.id}"
+                   onclick="window._gmExpandTile('${p.id}')" title="Click to expand">
+        <div class="call-tile-video-wrap" id="calltile-video-${p.id}">
+          <video class="call-tile-video hidden" id="calltile-vid-${p.id}" autoplay playsinline ${p.isSelf ? 'muted' : ''}></video>
+          <button class="call-tile-fullscreen hidden" id="calltile-fs-${p.id}"
+            onclick="event.stopPropagation();window._gmFullscreenTile('${p.id}')" title="Fullscreen">⛶</button>
+          <div class="call-tile-avatar${speaking ? ' vc-speaking-glow' : ''}" id="calltile-avatar-${p.id}"
+               style="background:${color}22;border:2px solid ${color}${speaking ? '' : '44'};color:${color}">
+            ${(p.name||'?').charAt(0).toUpperCase()}
+          </div>
         </div>
         <div class="call-tile-name">${escapeHtml(p.name)}${p.isSelf ? ' (you)' : ''}</div>
-        ${speaking ? '<div class="call-tile-speaking-badge">● speaking</div>' : ''}
       </div>`;
     }).join('');
 
@@ -530,20 +536,48 @@ function _refreshCallView(rid, vcId) {
         <span class="call-view-count">${allParticipants.length} participant${allParticipants.length !== 1 ? 's' : ''}</span>
         <button class="call-view-close icon-btn" onclick="window._gmCloseCallView()" title="Back to chat">✕ Close</button>
       </div>
-      <div class="call-tiles-grid">${tileHtml || '<div class="call-empty">No one else in this channel yet</div>'}</div>
+      <div class="call-tiles-grid" id="call-tiles-grid">${tileHtml || '<div class="call-empty">No one else in this channel yet</div>'}</div>
       <div class="call-controls">
         <button class="call-ctrl-btn${muted ? ' active-red' : ''}" id="call-mute-btn"
           onclick="window._gmToggleMute('${rid}');window._gmRefreshCallControls('${rid}','${vcId}')" title="${muted ? 'Unmute' : 'Mute'}">
-          ${muted ? '🔇' : '🎤'} ${muted ? 'Unmuted' : 'Mute'}
+          ${muted ? '🔇' : '🎤'} ${muted ? 'Unmute' : 'Mute'}
         </button>
         <button class="call-ctrl-btn${deafened ? ' active-red' : ''}" id="call-deafen-btn"
           onclick="window._gmToggleDeafen('${rid}');window._gmRefreshCallControls('${rid}','${vcId}')" title="${deafened ? 'Undeafen' : 'Deafen'}">
           ${deafened ? '🔕' : '🔊'} ${deafened ? 'Undeafen' : 'Deafen'}
         </button>
+        <button class="call-ctrl-btn" id="call-cam-btn"
+          onclick="window._gmToggleCam('${rid}')" title="Toggle camera">
+          📷 Camera
+        </button>
+        <button class="call-ctrl-btn" id="call-screen-btn"
+          onclick="window._gmToggleScreen('${rid}')" title="Share screen">
+          🖥️ Share
+        </button>
         <button class="call-ctrl-btn danger" onclick="window._gmLeaveVoice('${rid}');window._gmCloseCallView()" title="Leave call">
           📵 Leave
         </button>
       </div>`;
+
+    // Reattach any active video streams to freshly-created DOM elements.
+    // Handles the case where a peer was already sharing before local user opened call view.
+    import('./voice.js').then(vv => {
+      vv.reattachActiveStreams();
+      _updateCamButton();
+      _updateScreenButton();
+      // Restore expanded state if one was active before the refresh
+      if (_expandedTileId) {
+        const grid2 = document.getElementById('call-tiles-grid');
+        if (grid2) {
+          grid2.classList.add('has-expanded');
+          grid2.querySelectorAll('.call-tile').forEach(t => {
+            const isTarget = t.id === `calltile-${_expandedTileId}`;
+            t.classList.toggle('call-tile-expanded', isTarget);
+            t.classList.toggle('call-tile-dimmed', !isTarget);
+          });
+        }
+      }
+    });
   });
 }
 
@@ -585,18 +619,102 @@ export function renderVoiceSpeakers(rid) {
     for (const pid of allPids) {
       const tile   = document.getElementById('calltile-' + pid);
       const avatar = tile?.querySelector('.call-tile-avatar');
-      const badge  = tile?.querySelector('.call-tile-speaking-badge');
       const speaking = !!activeSpeakers[pid];
       if (tile)   tile.classList.toggle('call-tile-speaking', speaking);
       if (avatar) avatar.classList.toggle('vc-speaking-glow', speaking);
-      if (speaking && !badge) {
-        const b = document.createElement('div');
-        b.className = 'call-tile-speaking-badge'; b.textContent = '● speaking';
-        tile?.appendChild(b);
-      } else if (!speaking && badge) {
-        badge.remove();
-      }
     }
+  }
+}
+
+// ─── VIDEO STREAM UI HELPERS ──────────────────────────────────────────────────
+let _expandedTileId  = null;
+let _localCamActive  = false;
+let _localScreenActive = false;
+
+export function setLocalVideoStream(stream, label) {
+  const vid = document.getElementById(`calltile-vid-${state.myId}`);
+  const av  = document.getElementById(`calltile-avatar-${state.myId}`);
+  const fsBtn = document.getElementById(`calltile-fs-${state.myId}`);
+  if (vid) { vid.srcObject = stream; vid.classList.remove('hidden'); }
+  av?.classList.add('hidden');
+  fsBtn?.classList.remove('hidden');
+  if (label === 'cam')    _localCamActive    = true;
+  if (label === 'screen') _localScreenActive = true;
+  _updateCamButton();
+  _updateScreenButton();
+}
+
+export function clearLocalVideo(label) {
+  if (label === 'cam')    _localCamActive    = false;
+  if (label === 'screen') _localScreenActive = false;
+  if (!_localCamActive && !_localScreenActive) {
+    const vid = document.getElementById(`calltile-vid-${state.myId}`);
+    const av  = document.getElementById(`calltile-avatar-${state.myId}`);
+    const fsBtn = document.getElementById(`calltile-fs-${state.myId}`);
+    if (vid) { vid.srcObject = null; vid.classList.add('hidden'); }
+    av?.classList.remove('hidden');
+    fsBtn?.classList.add('hidden');
+  }
+  _updateCamButton();
+  _updateScreenButton();
+}
+
+export function setRemoteVideoTrack(peerId, stream) {
+  const vid = document.getElementById(`calltile-vid-${peerId}`);
+  const av  = document.getElementById(`calltile-avatar-${peerId}`);
+  const fsBtn = document.getElementById(`calltile-fs-${peerId}`);
+  if (vid) { vid.srcObject = stream; vid.classList.remove('hidden'); }
+  av?.classList.add('hidden');
+  fsBtn?.classList.remove('hidden');
+}
+
+export function clearRemoteVideo(peerId) {
+  const vid = document.getElementById(`calltile-vid-${peerId}`);
+  const av  = document.getElementById(`calltile-avatar-${peerId}`);
+  const fsBtn = document.getElementById(`calltile-fs-${peerId}`);
+  if (vid) { vid.srcObject = null; vid.classList.add('hidden'); }
+  av?.classList.remove('hidden');
+  fsBtn?.classList.add('hidden');
+}
+
+function _updateCamButton() {
+  const btn = document.getElementById('call-cam-btn');
+  if (!btn) return;
+  btn.classList.toggle('active-red', _localCamActive);
+  btn.textContent = _localCamActive ? '📷 Cam off' : '📷 Camera';
+}
+
+function _updateScreenButton() {
+  const btn = document.getElementById('call-screen-btn');
+  if (!btn) return;
+  btn.classList.toggle('active-red', _localScreenActive);
+  btn.textContent = _localScreenActive ? '🖥️ Stop share' : '🖥️ Share';
+}
+
+export function fullscreenTile(peerId) {
+  const vid = document.getElementById(`calltile-vid-${peerId}`);
+  if (!vid || vid.classList.contains('hidden')) return;
+  if (vid.requestFullscreen) vid.requestFullscreen();
+  else if (vid.webkitRequestFullscreen) vid.webkitRequestFullscreen();
+}
+
+export function expandCallTile(peerId) {
+  const grid = document.getElementById('call-tiles-grid'); if (!grid) return;
+  if (_expandedTileId === peerId) {
+    // Collapse
+    _expandedTileId = null;
+    grid.classList.remove('has-expanded');
+    grid.querySelectorAll('.call-tile').forEach(t => {
+      t.classList.remove('call-tile-expanded', 'call-tile-dimmed');
+    });
+  } else {
+    _expandedTileId = peerId;
+    grid.classList.add('has-expanded');
+    grid.querySelectorAll('.call-tile').forEach(t => {
+      const isTarget = t.id === `calltile-${peerId}`;
+      t.classList.toggle('call-tile-expanded', isTarget);
+      t.classList.toggle('call-tile-dimmed', !isTarget);
+    });
   }
 }
 

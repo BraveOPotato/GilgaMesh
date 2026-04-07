@@ -194,26 +194,19 @@ export async function leaveVoiceChannel(rid, rejoinNormal = true) {
 // Coordinates a deterministic hand-off when joining or leaving a voice channel.
 //
 // Joining (vcId != null):
-//   1. Among our current children, separate voice-same-channel kids from non-voice kids.
-//   2. If there are non-voice children, pick the best one (fewest children, most
-//      capacity) as the "relay node" C.
-//      - Tell all other non-voice children to reassign their parent to C.
-//      - Tell C to become the relay (it will accept those siblings as children).
-//      - After a short delay (C needs time to accept them), we send adopt_request to C.
-//   3. If there are no non-voice children (all kids are same-channel voice nodes,
-//      or we have no children at all), fall through to a plain findAndJoinParent.
+//   Among current children, pick one non-voice child as relay (C).
+//   - Tell other non-voice children: reassign_parent → C
+//   - Tell C: voice_relay_promote (detach, become root, wait for A)
+//   - After 600ms, A sends adopt_request directly to C
+//   Same-channel voice children are kept as A's children unchanged.
 //
 // Leaving (vcId == null):
-//   Detach from the current parent and run a plain findAndJoinParent — no special
-//   child coordination needed because we are no longer a voice node.
+//   Evict all children (they self-recover), detach from parent, findAndJoinParent.
 async function rejoineVoiceSubtree(rid, vcId) {
   const r = state.rooms[rid]; if (!r) return;
 
   if (vcId) {
-    // ── JOINING a voice channel ──────────────────────────────────────────────
-    // Separate children into same-channel voice kids (keep) vs non-voice kids
-    // (need a relay). Children in a *different* voice channel are treated the
-    // same as non-voice for relay purposes.
+    // ── JOINING ──────────────────────────────────────────────────────────────
     const sameVoiceChildren = r.childIds.filter(
       cid => r.clusterMap[cid]?.voiceChannelId === vcId
     );
@@ -224,8 +217,7 @@ async function rejoineVoiceSubtree(rid, vcId) {
     console.log(`[voice] rejoineVoiceSubtree(${rid}) joining vcId=${vcId} — sameVoice:${sameVoiceChildren.length}, nonVoice:${nonVoiceChildren.length}`);
 
     if (nonVoiceChildren.length > 0) {
-      // ── Pick relay node C: non-voice child with most remaining capacity ────
-      // "Closest to centre" = fewest current children (most room to accept more).
+      // Pick relay C: non-voice child with fewest children (most capacity)
       const relayId = nonVoiceChildren.reduce((best, cid) => {
         const bc = r.clusterMap[best]?.childCount ?? 0;
         const cc = r.clusterMap[cid]?.childCount  ?? 0;
@@ -236,17 +228,15 @@ async function rejoineVoiceSubtree(rid, vcId) {
 
       console.log(`[voice] rejoineVoiceSubtree(${rid}) — relay=${relayId}, redirecting ${siblingsForRelay.length} sibling(s) to relay`);
 
-      // Tell every non-relay, non-voice child to connect to C as their new parent.
+      // Tell non-relay non-voice children to connect to C
       for (const cid of siblingsForRelay) {
         const conn = r.childConns[cid] || state.peerConns[cid]?.conn;
         if (conn?.open) {
-          try {
-            conn.send({ type: 'reassign_parent', roomId: rid, newParentId: relayId });
-          } catch {}
+          try { conn.send({ type: 'reassign_parent', roomId: rid, newParentId: relayId }); } catch {}
         }
       }
 
-      // Tell C: you are the relay — accept the incoming siblings and expect A.
+      // Tell C: you are the relay
       const relayConn = r.childConns[relayId] || state.peerConns[relayId]?.conn;
       if (relayConn?.open) {
         try {
@@ -259,65 +249,45 @@ async function rejoineVoiceSubtree(rid, vcId) {
         } catch {}
       }
 
-      // Detach C (and other non-voice children) from our child list now.
-      // Same-channel voice children stay — we keep them as children because
-      // they will remain in our voice subtree.
-      for (const cid of nonVoiceChildren) {
-        delete r.childConns[cid];
-      }
+      // Detach non-voice children from our child list; keep same-voice children
+      for (const cid of nonVoiceChildren) delete r.childConns[cid];
       r.childIds = sameVoiceChildren;
       updateClusterMapSelf(rid);
 
-      // Detach from our own parent if we have one.
+      // Detach from our own parent if we have one
       if (r.parentId) {
         console.log(`[voice] rejoineVoiceSubtree(${rid}) — detaching from parent ${r.parentId}`);
         if (r.parentConn?.open) {
           try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
         }
-        r.parentId         = null;
-        r.parentConn       = null;
-        r.grandparentId    = null;
-        r.distanceFromRoot = 0;
+        r.parentId = null; r.parentConn = null; r.grandparentId = null; r.distanceFromRoot = 0;
       }
 
-      r._joiningParent   = false;
-      r._becomeRootRetries = 0;
+      r._joiningParent = false; r._becomeRootRetries = 0;
       updateClusterMapSelf(rid);
       broadcastClusterMap(rid);
 
-      // Give C time to accept the reassigned siblings before we knock on its door.
+      // Give C time to accept reassigned siblings before we knock
       await new Promise(res => setTimeout(res, 600));
 
       console.log(`[voice] rejoineVoiceSubtree(${rid}) — sending adopt_request to relay ${relayId}`);
       state.cb.connectTo?.(relayId, conn => {
-        conn.send({
-          type:           'adopt_request',
-          roomId:         rid,
-          id:             state.myId,
-          name:           state.myName,
-          voiceChannelId: vcId,
-        });
+        conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName, voiceChannelId: vcId });
       }, () => {
-        // Relay unreachable — fall back to a general search
-        console.warn(`[voice] rejoineVoiceSubtree(${rid}) — relay ${relayId} unreachable, falling back to findAndJoinParent`);
+        console.warn(`[voice] rejoineVoiceSubtree(${rid}) — relay ${relayId} unreachable, falling back`);
         findAndJoinParent(rid, { force: true });
       });
       return;
     }
 
-    // No non-voice children — nothing to hand off. Just detach upward if needed
-    // and let findAndJoinParent place us (same-channel peer or regular node).
+    // No non-voice children — just detach upward and findAndJoinParent
     if (r.parentId) {
       if (r.parentConn?.open) {
         try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
       }
-      r.parentId         = null;
-      r.parentConn       = null;
-      r.grandparentId    = null;
-      r.distanceFromRoot = 0;
+      r.parentId = null; r.parentConn = null; r.grandparentId = null; r.distanceFromRoot = 0;
     }
-    r._joiningParent   = false;
-    r._becomeRootRetries = 0;
+    r._joiningParent = false; r._becomeRootRetries = 0;
     updateClusterMapSelf(rid);
     broadcastClusterMap(rid);
     await new Promise(res => setTimeout(res, 300));
@@ -325,9 +295,7 @@ async function rejoineVoiceSubtree(rid, vcId) {
     return;
   }
 
-  // ── LEAVING a voice channel (vcId == null) ───────────────────────────────
-  // We were a voice node. Evict all children (they'll self-recover), detach
-  // from parent, and re-join as a plain node.
+  // ── LEAVING (vcId == null) ────────────────────────────────────────────────
   const evictedChildIds = [...r.childIds];
   if (evictedChildIds.length > 0) {
     console.log(`[voice] rejoineVoiceSubtree(${rid}) leaving — evicting ${evictedChildIds.length} children`);
@@ -336,8 +304,7 @@ async function rejoineVoiceSubtree(rid, vcId) {
       const conn = r.childConns[cid] || state.peerConns[cid]?.conn;
       if (conn?.open) try { conn.send(evictMsg); } catch {}
     }
-    r.childIds   = [];
-    r.childConns = {};
+    r.childIds = []; r.childConns = {};
     await new Promise(res => setTimeout(res, 400));
   }
 
@@ -346,13 +313,9 @@ async function rejoineVoiceSubtree(rid, vcId) {
     if (r.parentConn?.open) {
       try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
     }
-    r.parentId         = null;
-    r.parentConn       = null;
-    r.grandparentId    = null;
-    r.distanceFromRoot = 0;
+    r.parentId = null; r.parentConn = null; r.grandparentId = null; r.distanceFromRoot = 0;
   }
-  r._joiningParent   = false;
-  r._becomeRootRetries = 0;
+  r._joiningParent = false; r._becomeRootRetries = 0;
   updateClusterMapSelf(rid);
   await new Promise(res => setTimeout(res, 300));
   findAndJoinParent(rid, { force: true, excludeIds: evictedChildIds });
@@ -374,8 +337,6 @@ export function handleVoiceEvictChildren(data) {
 // Sent by a voice node (A) to the chosen relay child (C).
 // C detaches from its current parent and becomes an independent root-level
 // node so it can accept A (and any reassigned siblings) as its children.
-// The relay is becoming a PARENT, not seeking one — _joiningParent must stay
-// false so it can freely accept incoming adopt_requests.
 export function handleVoiceRelayPromote(data) {
   const rid = data.roomId;
   const r   = state.rooms[rid]; if (!r) return;
@@ -386,9 +347,8 @@ export function handleVoiceRelayPromote(data) {
   if (!r._pendingVoiceAdopters) r._pendingVoiceAdopters = new Set();
   r._pendingVoiceAdopters.add(data.voiceNodeId);
 
-  // Detach from our current parent (may be the voice node itself, or any
-  // other node). We need to be parentless so the voice node can adopt us
-  // as its child (making us C's parent in the new topology).
+  // Detach from our current parent unconditionally — we need to be parentless
+  // so the voice node can adopt us. The relay becomes a root, not a seeker.
   if (r.parentId) {
     if (r.parentConn?.open) {
       try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
@@ -399,10 +359,8 @@ export function handleVoiceRelayPromote(data) {
     r.distanceFromRoot = 0;
   }
 
-  // Do NOT set _joiningParent=true here. The relay is becoming a root that
-  // accepts incoming adopt_requests — it is not seeking a parent itself.
-  // _joiningParent=true would block becomeRoot's suppression logic but would
-  // also prevent normal recovery if the voice node never arrives.
+  // Do NOT set _joiningParent=true — the relay is becoming a root that
+  // accepts adopt_requests, not a node waiting to be adopted.
   r._joiningParent     = false;
   r._becomeRootRetries = 0;
 
@@ -434,8 +392,8 @@ export function checkVoiceAdoptAffinity(rid, requesterVoiceChannelId, conn) {
   const r = state.rooms[rid]; if (!r) return { allow: true, redirectTo: null, reason: 'no room' };
 
   // If this node was promoted as a relay and the requester is the expected
-  // voice node, accept unconditionally — redirecting would send A back to one
-  // of A's own descendants (cycle). Clear the pending entry after accepting.
+  // voice node, accept unconditionally — any redirect would send A back to
+  // one of A's own descendants (cycle). Clear the pending entry after use.
   if (r._pendingVoiceAdopters?.has(conn.peer)) {
     r._pendingVoiceAdopters.delete(conn.peer);
     console.log(`[voice] checkVoiceAdoptAffinity — accepting pending voice adopter ${conn.peer} (relay handshake)`);
@@ -451,28 +409,23 @@ export function checkVoiceAdoptAffinity(rid, requesterVoiceChannelId, conn) {
   // I am in a voice channel
   if (myVcId) {
     if (reqVcId === myVcId) {
-      // Same channel — accept
       return { allow: true, redirectTo: null, reason: 'same voice channel' };
     }
-    // Requester is in different channel or no channel — redirect to a non-voice node
+    // Redirect to a non-voice node — exclude the requester to prevent self-redirect
     const redirect = findNonVoiceParentCandidate(rid, conn.peer);
     console.log(`[voice] checkVoiceAdoptAffinity — I am voice(${myVcId}), requester is ${reqVcId||'non-voice'}, redirecting to ${redirect||'(none)'}`);
     return { allow: false, redirectTo: redirect, reason: 'voice channel mismatch' };
   }
 
-  // I am NOT in a voice channel, requester IS in a voice channel
-  // Regular nodes accept voice nodes (they will appear as normal children topology-wise)
-  // but ideally the voice node should find a same-channel parent.
-  // If there's a same-channel peer available (other than the requester itself), redirect;
-  // otherwise accept — the requester is the first (or only) node in this voice channel.
+  // I am NOT in a voice channel, requester IS — redirect to same-channel peer if one exists
+  // (exclude the requester itself to prevent self-redirect loops)
   if (reqVcId) {
-    const requesterId = conn.peer;
-    const sameChannelPeer = findVoiceChannelParentCandidate(rid, reqVcId, requesterId);
+    const sameChannelPeer = findVoiceChannelParentCandidate(rid, reqVcId, conn.peer);
     if (sameChannelPeer) {
       console.log(`[voice] checkVoiceAdoptAffinity — redirecting voice(${reqVcId}) requester to same-channel peer ${sameChannelPeer}`);
       return { allow: false, redirectTo: sameChannelPeer, reason: 'better voice parent available' };
     }
-    // No same-channel peer exists (other than the requester) — accept them
+    // No other same-channel peer — accept as first/only voice node
     return { allow: true, redirectTo: null, reason: 'first node in voice channel' };
   }
 
@@ -513,7 +466,7 @@ function findVoiceChannelParentCandidate(rid, vcId, excludeId = null) {
   let best = null, bestDist = Infinity;
   for (const [pid, e] of Object.entries(r.clusterMap)) {
     if (pid === state.myId) continue;
-    if (pid === excludeId) continue;  // never redirect the requester back to themselves
+    if (pid === excludeId) continue;  // never redirect requester back to themselves
     if (e.voiceChannelId !== vcId) continue;
     const children = e.childCount ?? 0;
     if (children >= SOFT_CHILD_LIMIT) continue;
@@ -528,8 +481,8 @@ function findNonVoiceParentCandidate(rid, excludeId = null) {
   let best = null, bestDist = Infinity;
   for (const [pid, e] of Object.entries(r.clusterMap)) {
     if (pid === state.myId) continue;
-    if (pid === excludeId) continue;  // never redirect the requester back to themselves
-    if (e.voiceChannelId) continue; // skip voice nodes
+    if (pid === excludeId) continue;  // never redirect requester back to themselves
+    if (e.voiceChannelId) continue;
     const children = e.childCount ?? 0;
     if (children >= SOFT_CHILD_LIMIT) continue;
     if (e.distance < bestDist) { bestDist = e.distance; best = pid; }
@@ -563,6 +516,8 @@ function stopLocalAudio() {
 }
 
 function stopAllPeerAudio() {
+  // Clear all jitter-buffer playheads
+  for (const k of Object.keys(_peerPlayhead)) delete _peerPlayhead[k];
   if (voiceState.playCtx) {
     voiceState.playCtx.close().catch(() => {});
     voiceState.playCtx = null;
@@ -571,74 +526,103 @@ function stopAllPeerAudio() {
 }
 
 // ─── RAW PCM CAPTURE (ScriptProcessorNode) ───────────────────────────────────
-// MediaRecorder splits a streaming container (WebM/Ogg) into chunks that are
-// NOT independently decodable — decodeAudioData requires a complete file with
-// headers, so every chunk after the first fails with "unknown content type".
-//
-// Instead we use ScriptProcessorNode to capture raw Float32 PCM from the mic,
-// downsample to TARGET_SAMPLE_RATE, convert to Int16, base64-encode, and send.
-// The receiver reconstructs an AudioBuffer directly — no codec, no container,
-// no decodeAudioData needed.
+// Uses ScriptProcessorNode to capture raw Float32 PCM from the mic, applies a
+// low-pass FIR filter before downsampling (prevents aliasing), converts to
+// Int16, base64-encodes, and sends.  Receiver uses a jitter buffer with
+// scheduled playback so chunks play gaplessly without overlap clicking.
 
-const TARGET_SAMPLE_RATE = 16000; // 16 kHz — good voice quality, low bandwidth
-const SCRIPT_BUFFER_SIZE = 4096;  // samples per callback (~85 ms at 48 kHz input)
-const VAD_THRESHOLD      = 0.01;  // RMS 0-1; skip silent frames
+const TARGET_SAMPLE_RATE = 24000; // 24 kHz — clearer voice, still low bandwidth
+const SCRIPT_BUFFER_SIZE = 2048;  // smaller buffer = lower latency (~42ms @48kHz)
+const VAD_THRESHOLD      = 0.008; // slightly more sensitive than before
 
 let _scriptProcessor = null;
 let _analyserNode    = null;
 let _vadBuffer       = null;
+
+// Simple windowed-sinc low-pass FIR — cutoff at TARGET_SAMPLE_RATE/2,
+// applied before decimation to prevent aliasing artifacts ("static").
+function _buildLowPassKernel(nativeSR, targetSR) {
+  const ratio   = targetSR / nativeSR;
+  const cutoff  = ratio * 0.9;           // 90% of Nyquist — small transition band
+  const taps    = 31;                    // odd number, linear phase
+  const half    = Math.floor(taps / 2);
+  const kernel  = new Float32Array(taps);
+  for (let i = 0; i < taps; i++) {
+    const n = i - half;
+    const sinc = n === 0 ? 1 : Math.sin(Math.PI * cutoff * n) / (Math.PI * cutoff * n);
+    // Hamming window
+    const w = 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (taps - 1));
+    kernel[i] = sinc * w;
+  }
+  // Normalise to unit gain at DC
+  const sum = kernel.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < taps; i++) kernel[i] /= sum;
+  return kernel;
+}
 
 function _startMediaRecorder() {
   if (!voiceState.localStream || !voiceState.captureCtx) return;
 
   const ctx        = voiceState.captureCtx;
   const source     = ctx.createMediaStreamSource(voiceState.localStream);
-  const nativeSR   = ctx.sampleRate;                       // typically 48000
+  const nativeSR   = ctx.sampleRate;
   const downsample = Math.max(1, Math.round(nativeSR / TARGET_SAMPLE_RATE));
+  const lpKernel   = _buildLowPassKernel(nativeSR, TARGET_SAMPLE_RATE);
+  const kernelLen  = lpKernel.length;
+  const halfKernel = Math.floor(kernelLen / 2);
 
-  // AnalyserNode for VAD — not connected to destination, mic never plays locally
+  // Ring buffer for FIR convolution state across ScriptProcessor callbacks
+  const ringBuf = new Float32Array(kernelLen);
+  let ringPos   = 0;
+
   _analyserNode         = ctx.createAnalyser();
   _analyserNode.fftSize = 256;
   _vadBuffer            = new Float32Array(_analyserNode.frequencyBinCount);
   source.connect(_analyserNode);
 
-  // ScriptProcessorNode captures raw PCM
   _scriptProcessor = ctx.createScriptProcessor(SCRIPT_BUFFER_SIZE, 1, 1);
   source.connect(_scriptProcessor);
 
-  // Route output to a silent gain node (ScriptProcessor must be connected to run)
   const muteGain = ctx.createGain();
   muteGain.gain.value = 0;
   _scriptProcessor.connect(muteGain);
   muteGain.connect(ctx.destination);
 
   _scriptProcessor.onaudioprocess = (e) => {
-    const input = e.inputBuffer.getChannelData(0); // Float32, nativeSR
+    const input = e.inputBuffer.getChannelData(0);
 
-    // VAD — skip silent frames
+    // VAD check
     _analyserNode.getFloatTimeDomainData(_vadBuffer);
     let sumSq = 0;
     for (let i = 0; i < _vadBuffer.length; i++) sumSq += _vadBuffer[i] * _vadBuffer[i];
     if (Math.sqrt(sumSq / _vadBuffer.length) < VAD_THRESHOLD) return;
 
-    // Downsample: take every Nth sample
+    // Apply FIR low-pass then decimate
     const outLen = Math.floor(input.length / downsample);
     const pcm16  = new Int16Array(outLen);
-    for (let i = 0; i < outLen; i++) {
-      const s = Math.max(-1, Math.min(1, input[i * downsample]));
-      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+
+    for (let outIdx = 0; outIdx < outLen; outIdx++) {
+      // Fill ring buffer with `downsample` new input samples
+      for (let d = 0; d < downsample; d++) {
+        ringBuf[ringPos] = input[outIdx * downsample + d];
+        ringPos = (ringPos + 1) % kernelLen;
+      }
+      // Convolve at this output sample position
+      let acc = 0;
+      for (let k = 0; k < kernelLen; k++) {
+        acc += lpKernel[k] * ringBuf[(ringPos - 1 - k + kernelLen * 2) % kernelLen];
+      }
+      const s   = Math.max(-1, Math.min(1, acc));
+      pcm16[outIdx] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
 
-    // Base64-encode the raw Int16 bytes
     const bytes  = new Uint8Array(pcm16.buffer);
     let   binary = '';
     for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    const b64 = btoa(binary);
-
-    _routeVoiceChunk(b64, TARGET_SAMPLE_RATE);
+    _routeVoiceChunk(btoa(binary), TARGET_SAMPLE_RATE);
   };
 
-  console.log(`[voice] ScriptProcessor started — nativeSR:${nativeSR} downsample:${downsample}x -> ${TARGET_SAMPLE_RATE} Hz`);
+  console.log(`[voice] ScriptProcessor started — nativeSR:${nativeSR} downsample:${downsample}x -> ${TARGET_SAMPLE_RATE} Hz (FIR LP + jitter buffer)`);
 }
 
 function _stopMediaRecorder() {
@@ -716,9 +700,18 @@ export function handleVoiceData(data, conn) {
 // Stub — binary frames are no longer sent; kept so main.js import compiles.
 export function handleVoiceBinary(buf, conn) {}
 
-// ─── AUDIO PLAYBACK ───────────────────────────────────────────────────────────
-// Receives base64-encoded Int16 PCM (from ScriptProcessorNode capture).
-// Reconstructs an AudioBuffer directly — no decodeAudioData, no codec needed.
+// ─── AUDIO PLAYBACK — jitter-buffered scheduled playback ─────────────────────
+// Instead of src.start(0) (which plays every chunk "now", causing overlaps and
+// clicks), we maintain a per-peer playhead and schedule each chunk to start
+// exactly when the previous one ends.  A small initial buffer (JITTER_AHEAD_S)
+// absorbs network jitter; if we fall behind we resync to avoid compounding lag.
+
+const JITTER_AHEAD_S   = 0.06;  // 60ms look-ahead buffer — absorbs typical jitter
+const MAX_LAG_S        = 0.25;  // if we're >250ms behind, resync playhead
+
+// Per-peer playhead: peerId → next scheduled AudioContext time
+const _peerPlayhead = {};
+
 function _playVoiceChunk(peerId, b64, sampleRate) {
   _ensurePlayCtx();
   const ctx = voiceState.playCtx;
@@ -730,14 +723,12 @@ function _playVoiceChunk(peerId, b64, sampleRate) {
     const binary = atob(b64);
     const bytes  = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    // View the bytes as Int16 (2 bytes per sample, little-endian)
     pcm16 = new Int16Array(bytes.buffer);
   } catch (e) {
     console.warn('[voice] base64 decode error:', e.message);
     return;
   }
 
-  // Convert Int16 → Float32 and load into an AudioBuffer
   const numSamples = pcm16.length;
   const sr         = sampleRate || TARGET_SAMPLE_RATE;
   let   audioBuf;
@@ -752,10 +743,21 @@ function _playVoiceChunk(peerId, b64, sampleRate) {
     f32[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7FFF);
   }
 
+  const chunkDuration = numSamples / sr;
+  const now           = ctx.currentTime;
+
+  // Initialise or resync the playhead for this peer
+  if (!_peerPlayhead[peerId] || _peerPlayhead[peerId] < now - MAX_LAG_S) {
+    _peerPlayhead[peerId] = now + JITTER_AHEAD_S;
+  }
+
+  const startTime = Math.max(_peerPlayhead[peerId], now + 0.005);
+  _peerPlayhead[peerId] = startTime + chunkDuration;
+
   const src = ctx.createBufferSource();
   src.buffer = audioBuf;
   src.connect(voiceState.gainNode);
-  src.start(0);
+  src.start(startTime);
 }
 
 // ─── MUTE / DEAFEN ────────────────────────────────────────────────────────────
@@ -811,4 +813,167 @@ export function myVoiceChannelId(rid) {
 
 export function getActiveSpeakers(rid) {
   return state.rooms[rid]?.activeSpeakers || {};
+}
+
+// ─── VIDEO / SCREEN SHARE (WebRTC RTCPeerConnection per peer) ────────────────
+// Each video stream is negotiated as a direct RTCPeerConnection between the
+// local node and every other participant in the same voice channel.
+// Signalling (offer/answer/ICE) piggybacks on the existing DataConnection.
+
+const _videoPCs   = {};  // peerId → RTCPeerConnection
+const _localVideoStream = { cam: null, screen: null }; // currently active local streams
+
+const VIDEO_ICE = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'turn:openrelay.metered.ca:80',                username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443',               username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+];
+
+function _getOrCreatePC(peerId, rid) {
+  if (_videoPCs[peerId]?.connectionState === 'closed') delete _videoPCs[peerId];
+  if (_videoPCs[peerId]) return _videoPCs[peerId];
+
+  const pc = new RTCPeerConnection({ iceServers: VIDEO_ICE });
+  _videoPCs[peerId] = pc;
+
+  pc.onicecandidate = ({ candidate }) => {
+    if (!candidate) return;
+    _sendVideoSignal(peerId, rid, { type: 'video_ice', candidate: candidate.toJSON() });
+  };
+
+  pc.ontrack = (e) => {
+    console.log(`[voice] video track received from ${peerId}`);
+    import('./ui.js').then(ui => ui.setRemoteVideoTrack(peerId, e.streams[0]));
+  };
+
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+      delete _videoPCs[peerId];
+      import('./ui.js').then(ui => ui.clearRemoteVideo(peerId));
+    }
+  };
+
+  // Add any already-active local tracks
+  const tracks = [
+    ...(_localVideoStream.cam?.getTracks()    || []),
+    ...(_localVideoStream.screen?.getTracks() || []),
+  ];
+  for (const t of tracks) pc.addTrack(t, _localVideoStream.cam || _localVideoStream.screen);
+
+  return pc;
+}
+
+function _sendVideoSignal(peerId, rid, msg) {
+  const conn = state.peerConns[peerId]?.conn;
+  if (conn?.open) try { conn.send({ ...msg, roomId: rid }); } catch {}
+}
+
+// Called by handleVideoSignal in main.js when a video_offer/answer/ice arrives
+export async function handleVideoSignal(data, conn) {
+  const rid    = data.roomId;
+  const peerId = conn.peer;
+  const r      = state.rooms[rid]; if (!r) return;
+
+  if (data.type === 'video_offer') {
+    const pc = _getOrCreatePC(peerId, rid);
+    await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    _sendVideoSignal(peerId, rid, { type: 'video_answer', sdp: pc.localDescription });
+  } else if (data.type === 'video_answer') {
+    await _videoPCs[peerId]?.setRemoteDescription(new RTCSessionDescription(data.sdp));
+  } else if (data.type === 'video_ice') {
+    try { await _videoPCs[peerId]?.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch {}
+  } else if (data.type === 'video_stop') {
+    // Remote peer stopped sharing
+    import('./ui.js').then(ui => ui.clearRemoteVideo(peerId));
+    if (_videoPCs[peerId]) {
+      _videoPCs[peerId].close();
+      delete _videoPCs[peerId];
+    }
+  }
+}
+
+async function _startVideoShare(rid, stream, label) {
+  _localVideoStream[label] = stream;
+  import('./ui.js').then(ui => ui.setLocalVideoStream(stream, label));
+
+  // Offer to all current voice-channel peers
+  const r = state.rooms[rid]; if (!r) return;
+  const peers = Object.entries(r.clusterMap)
+    .filter(([pid, e]) => e.voiceChannelId === r.myVoiceChannelId && pid !== state.myId)
+    .map(([pid]) => pid);
+
+  for (const peerId of peers) {
+    const pc = _getOrCreatePC(peerId, rid);
+    for (const t of stream.getTracks()) {
+      const senders = pc.getSenders();
+      if (!senders.find(s => s.track === t)) pc.addTrack(t, stream);
+    }
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    _sendVideoSignal(peerId, rid, { type: 'video_offer', sdp: pc.localDescription });
+  }
+}
+
+export async function startCamShare(rid) {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    await _startVideoShare(rid, stream, 'cam');
+    toast('Camera on', 'success');
+  } catch (e) { toast('Camera access denied', 'error'); }
+}
+
+export async function startScreenShare(rid) {
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    stream.getVideoTracks()[0].onended = () => stopVideoShare(rid, 'screen');
+    await _startVideoShare(rid, stream, 'screen');
+    toast('Screen sharing', 'success');
+  } catch (e) { toast('Screen share cancelled', 'info'); }
+}
+
+export function stopVideoShare(rid, label = 'cam') {
+  const stream = _localVideoStream[label];
+  if (!stream) return;
+  stream.getTracks().forEach(t => t.stop());
+  _localVideoStream[label] = null;
+  import('./ui.js').then(ui => ui.clearLocalVideo(label));
+
+  // Notify peers
+  const r = state.rooms[rid]; if (!r) return;
+  const peers = Object.entries(r.clusterMap)
+    .filter(([pid, e]) => e.voiceChannelId === r.myVoiceChannelId && pid !== state.myId)
+    .map(([pid]) => pid);
+  for (const peerId of peers) _sendVideoSignal(peerId, rid, { type: 'video_stop' });
+
+  // If no more video, tear down all PCs
+  if (!_localVideoStream.cam && !_localVideoStream.screen) {
+    for (const [pid, pc] of Object.entries(_videoPCs)) { pc.close(); delete _videoPCs[pid]; }
+  }
+}
+
+export function stopAllVideo(rid) {
+  stopVideoShare(rid, 'cam');
+  stopVideoShare(rid, 'screen');
+}
+
+// Called by ui.js after rebuilding the call view DOM to reattach active streams.
+export function reattachActiveStreams() {
+  // Reattach local streams
+  const localStream = _localVideoStream.screen || _localVideoStream.cam;
+  if (localStream) {
+    import('./ui.js').then(ui => ui.setLocalVideoStream(localStream, _localVideoStream.screen ? 'screen' : 'cam'));
+  }
+  // Reattach remote streams from open PeerConnections
+  for (const [peerId, pc] of Object.entries(_videoPCs)) {
+    const receivers = pc.getReceivers?.() || [];
+    const videoReceiver = receivers.find(r => r.track?.kind === 'video' && r.track.readyState === 'live');
+    if (videoReceiver) {
+      const stream = new MediaStream([videoReceiver.track]);
+      import('./ui.js').then(ui => ui.setRemoteVideoTrack(peerId, stream));
+    }
+  }
 }

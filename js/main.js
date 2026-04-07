@@ -18,7 +18,7 @@ import {
 } from './mesh.js';
 import { handleElectionStart, handleElectionVote, handleElectionWon, startLocalElection } from './election.js';
 import { handleIncomingMessage, handleMsgAck, addSystemMsg, displayMessage, flushPendingMessages, onTyping, handleTyping } from './messaging.js';
-import { handleVoiceChannelCreated, handleVoiceData, handleVoiceBinary, handleBecomeMyChild, handleVoiceEvictChildren, handleVoiceRelayPromote } from './voice.js';
+import { handleVoiceChannelCreated, handleVoiceData, handleVoiceBinary, handleBecomeMyChild, handleVoiceEvictChildren, handleVoiceRelayPromote, handleVideoSignal } from './voice.js';
 import { handleChannelCreated, switchChannel, createRoom, createChannel, joinRoomViaInvite,
          confirmLeaveRoom, leaveRoom, showInvite, copyInviteLink, checkJoinUrl,
          backToRooms, switchRoom, handlePeerLeaving } from './rooms.js';
@@ -31,7 +31,7 @@ import {
   toggleSidebar, closeSidebar, openNetPanel, closeNetPanel,
   handleMentionInput, moveMentionSelection, confirmMention, closeMentionPopup,
   renderMentionText,
-  openCallView, closeCallView,
+  openCallView, closeCallView, expandCallTile, fullscreenTile,
 } from './ui.js';
 import { copyToClipboard, escapeHtml } from './utils.js';
 import { SCORE_WINDOW } from './constants.js';
@@ -255,6 +255,12 @@ export function handleChatData(data, conn) {
     case 'voice_relay_promote':
       if (rid) handleVoiceRelayPromote(data);
       break;
+    case 'video_offer':
+    case 'video_answer':
+    case 'video_ice':
+    case 'video_stop':
+      if (rid) handleVideoSignal(data, conn);
+      break;
   }
 }
 
@@ -390,6 +396,22 @@ Object.assign(window, {
   _gmLeaveVoice: (rid) => import('./voice.js').then(v => { v.leaveVoiceChannel(rid); closeCallView(); }),
   _gmToggleMute: (rid) => import('./voice.js').then(v => v.toggleMute(rid)),
   _gmToggleDeafen: (rid) => import('./voice.js').then(v => v.toggleDeafen(rid)),
+  _gmToggleCam: (rid) => import('./voice.js').then(v => {
+    if (document.getElementById('call-cam-btn')?.classList.contains('active-red')) {
+      v.stopVideoShare(rid, 'cam');
+    } else {
+      v.startCamShare(rid);
+    }
+  }),
+  _gmToggleScreen: (rid) => import('./voice.js').then(v => {
+    if (document.getElementById('call-screen-btn')?.classList.contains('active-red')) {
+      v.stopVideoShare(rid, 'screen');
+    } else {
+      v.startScreenShare(rid);
+    }
+  }),
+  _gmExpandTile: (peerId) => expandCallTile(peerId),
+  _gmFullscreenTile: (peerId) => fullscreenTile(peerId),
   _gmToggleCallView: (rid, vcId) => {
     const cv = document.getElementById('call-view');
     if (cv && cv.dataset.vcId === vcId) { closeCallView(); } else { openCallView(rid, vcId); }
