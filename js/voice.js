@@ -191,79 +191,171 @@ export async function leaveVoiceChannel(rid, rejoinNormal = true) {
 }
 
 // ─── REJOIN WITH VOICE AFFINITY ───────────────────────────────────────────────
-// Evicts all current children, detaches from the current parent, then re-attaches
-// using voice-aware candidate selection.  Called both on join and on leave.
+// Coordinates a deterministic hand-off when joining or leaving a voice channel.
+//
+// Joining (vcId != null):
+//   1. Among our current children, separate voice-same-channel kids from non-voice kids.
+//   2. If there are non-voice children, pick the best one (fewest children, most
+//      capacity) as the "relay node" C.
+//      - Tell all other non-voice children to reassign their parent to C.
+//      - Tell C to become the relay (it will accept those siblings as children).
+//      - After a short delay (C needs time to accept them), we send adopt_request to C.
+//   3. If there are no non-voice children (all kids are same-channel voice nodes,
+//      or we have no children at all), fall through to a plain findAndJoinParent.
+//
+// Leaving (vcId == null):
+//   Detach from the current parent and run a plain findAndJoinParent — no special
+//   child coordination needed because we are no longer a voice node.
 async function rejoineVoiceSubtree(rid, vcId) {
   const r = state.rooms[rid]; if (!r) return;
 
-  // ── Step 1: Evict children ─────────────────────────────────────────────────
-  // Tell every child "your parent is leaving — find a new one."
-  // This triggers onParentLost on the child side, which runs recovery and
-  // re-attaches them to the appropriate node in the cluster.
-  // We do this BEFORE detaching from our own parent so children still have
-  // the clusterMap needed to find alternative parents.
-  // Track evicted IDs so we can exclude them as parent candidates — they were
-  // just below us and haven't settled yet; connecting to them now would race
-  // and can create a mutual-parent cycle (A→B, B→A).
+  if (vcId) {
+    // ── JOINING a voice channel ──────────────────────────────────────────────
+    // Separate children into same-channel voice kids (keep) vs non-voice kids
+    // (need a relay). Children in a *different* voice channel are treated the
+    // same as non-voice for relay purposes.
+    const sameVoiceChildren = r.childIds.filter(
+      cid => r.clusterMap[cid]?.voiceChannelId === vcId
+    );
+    const nonVoiceChildren = r.childIds.filter(
+      cid => r.clusterMap[cid]?.voiceChannelId !== vcId
+    );
+
+    console.log(`[voice] rejoineVoiceSubtree(${rid}) joining vcId=${vcId} — sameVoice:${sameVoiceChildren.length}, nonVoice:${nonVoiceChildren.length}`);
+
+    if (nonVoiceChildren.length > 0) {
+      // ── Pick relay node C: non-voice child with most remaining capacity ────
+      // "Closest to centre" = fewest current children (most room to accept more).
+      const relayId = nonVoiceChildren.reduce((best, cid) => {
+        const bc = r.clusterMap[best]?.childCount ?? 0;
+        const cc = r.clusterMap[cid]?.childCount  ?? 0;
+        return cc < bc ? cid : best;
+      }, nonVoiceChildren[0]);
+
+      const siblingsForRelay = nonVoiceChildren.filter(cid => cid !== relayId);
+
+      console.log(`[voice] rejoineVoiceSubtree(${rid}) — relay=${relayId}, redirecting ${siblingsForRelay.length} sibling(s) to relay`);
+
+      // Tell every non-relay, non-voice child to connect to C as their new parent.
+      for (const cid of siblingsForRelay) {
+        const conn = r.childConns[cid] || state.peerConns[cid]?.conn;
+        if (conn?.open) {
+          try {
+            conn.send({ type: 'reassign_parent', roomId: rid, newParentId: relayId });
+          } catch {}
+        }
+      }
+
+      // Tell C: you are the relay — accept the incoming siblings and expect A.
+      const relayConn = r.childConns[relayId] || state.peerConns[relayId]?.conn;
+      if (relayConn?.open) {
+        try {
+          relayConn.send({
+            type:             'voice_relay_promote',
+            roomId:           rid,
+            incomingSiblings: siblingsForRelay,
+            voiceNodeId:      state.myId,
+          });
+        } catch {}
+      }
+
+      // Detach C (and other non-voice children) from our child list now.
+      // Same-channel voice children stay — we keep them as children because
+      // they will remain in our voice subtree.
+      for (const cid of nonVoiceChildren) {
+        delete r.childConns[cid];
+      }
+      r.childIds = sameVoiceChildren;
+      updateClusterMapSelf(rid);
+
+      // Detach from our own parent if we have one.
+      if (r.parentId) {
+        console.log(`[voice] rejoineVoiceSubtree(${rid}) — detaching from parent ${r.parentId}`);
+        if (r.parentConn?.open) {
+          try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
+        }
+        r.parentId         = null;
+        r.parentConn       = null;
+        r.grandparentId    = null;
+        r.distanceFromRoot = 0;
+      }
+
+      r._joiningParent   = false;
+      r._becomeRootRetries = 0;
+      updateClusterMapSelf(rid);
+      broadcastClusterMap(rid);
+
+      // Give C time to accept the reassigned siblings before we knock on its door.
+      await new Promise(res => setTimeout(res, 600));
+
+      console.log(`[voice] rejoineVoiceSubtree(${rid}) — sending adopt_request to relay ${relayId}`);
+      state.cb.connectTo?.(relayId, conn => {
+        conn.send({
+          type:           'adopt_request',
+          roomId:         rid,
+          id:             state.myId,
+          name:           state.myName,
+          voiceChannelId: vcId,
+        });
+      }, () => {
+        // Relay unreachable — fall back to a general search
+        console.warn(`[voice] rejoineVoiceSubtree(${rid}) — relay ${relayId} unreachable, falling back to findAndJoinParent`);
+        findAndJoinParent(rid, { force: true });
+      });
+      return;
+    }
+
+    // No non-voice children — nothing to hand off. Just detach upward if needed
+    // and let findAndJoinParent place us (same-channel peer or regular node).
+    if (r.parentId) {
+      if (r.parentConn?.open) {
+        try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
+      }
+      r.parentId         = null;
+      r.parentConn       = null;
+      r.grandparentId    = null;
+      r.distanceFromRoot = 0;
+    }
+    r._joiningParent   = false;
+    r._becomeRootRetries = 0;
+    updateClusterMapSelf(rid);
+    broadcastClusterMap(rid);
+    await new Promise(res => setTimeout(res, 300));
+    findAndJoinParent(rid, { force: true });
+    return;
+  }
+
+  // ── LEAVING a voice channel (vcId == null) ───────────────────────────────
+  // We were a voice node. Evict all children (they'll self-recover), detach
+  // from parent, and re-join as a plain node.
   const evictedChildIds = [...r.childIds];
   if (evictedChildIds.length > 0) {
-    console.log(`[voice] rejoineVoiceSubtree(${rid}) — evicting ${evictedChildIds.length} children`);
-    const evictMsg = {
-      type:      'voice_evict_children',
-      roomId:    rid,
-      vcId:      vcId,
-      lostParentId: state.myId,
-    };
+    console.log(`[voice] rejoineVoiceSubtree(${rid}) leaving — evicting ${evictedChildIds.length} children`);
+    const evictMsg = { type: 'voice_evict_children', roomId: rid, vcId: null, lostParentId: state.myId };
     for (const cid of evictedChildIds) {
       const conn = r.childConns[cid] || state.peerConns[cid]?.conn;
       if (conn?.open) try { conn.send(evictMsg); } catch {}
     }
-    // Clear our child list — we no longer own them
-    r.childIds  = [];
+    r.childIds   = [];
     r.childConns = {};
-    // Give children a moment to receive the message before we disconnect
     await new Promise(res => setTimeout(res, 400));
   }
 
-  if (!r.parentId) {
-    // We are root — detach ourselves from root status so findAndJoinParent
-    // can place us as a child of a regular node (or same-channel voice node).
-    // Must clear _joiningParent here; it may have been set true by an earlier
-    // call and never cleared because we returned early from the non-root path.
-    r._joiningParent   = false;
-    r._becomeRootRetries = 0;
-    r.distanceFromRoot = 0;   // stays 0 until adopt_ack sets the real value
-    updateClusterMapSelf(rid);
-    broadcastClusterMap(rid);
-
-    if (vcId) {
-      // Small delay so evicted children's peer_leaving notices have settled
-      // before we start competing for the same parent candidates.
-      await new Promise(res => setTimeout(res, 300));
-      findAndJoinParent(rid, { force: true, excludeIds: evictedChildIds });
+  if (r.parentId) {
+    console.log(`[voice] rejoineVoiceSubtree(${rid}) leaving — detaching from parent ${r.parentId}`);
+    if (r.parentConn?.open) {
+      try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
     }
-    return;
+    r.parentId         = null;
+    r.parentConn       = null;
+    r.grandparentId    = null;
+    r.distanceFromRoot = 0;
   }
-
-  console.log(`[voice] rejoineVoiceSubtree(${rid}) — detaching from ${r.parentId}, vcId=${vcId}`);
-
-  // ── Step 2: Detach from parent ─────────────────────────────────────────────
-  if (r.parentConn?.open) {
-    try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
-  }
-
-  r.parentId         = null;
-  r.parentConn       = null;
-  r.grandparentId    = null;
-  r.distanceFromRoot = 0;
   r._joiningParent   = false;
+  r._becomeRootRetries = 0;
   updateClusterMapSelf(rid);
-
-  // Small delay so the parent can process the leaving notice
   await new Promise(res => setTimeout(res, 300));
-
-  // ── Step 3: Re-join with voice-aware candidate selection ───────────────────
-  findAndJoinParent(rid, { excludeIds: evictedChildIds });
+  findAndJoinParent(rid, { force: true, excludeIds: evictedChildIds });
 }
 
 // ─── HANDLE CHILD EVICTION ────────────────────────────────────────────────────
@@ -276,6 +368,52 @@ export function handleVoiceEvictChildren(data) {
   console.log(`[voice] handleVoiceEvictChildren(${rid}) — parent ${data.lostParentId} joining voice(${data.vcId}), running recovery`);
   // Import mesh dynamically to avoid circular dep at module load
   import('./mesh.js').then(mesh => mesh.onParentLostPublic(rid, data.lostParentId));
+}
+
+// ─── HANDLE VOICE RELAY PROMOTE ──────────────────────────────────────────────
+// Sent by a voice node (A) to the chosen relay child (C).
+// C detaches from its current parent and becomes an independent root-level
+// node so it can accept A (and any reassigned siblings) as its children.
+// The relay is becoming a PARENT, not seeking one — _joiningParent must stay
+// false so it can freely accept incoming adopt_requests.
+export function handleVoiceRelayPromote(data) {
+  const rid = data.roomId;
+  const r   = state.rooms[rid]; if (!r) return;
+  console.log(`[voice] handleVoiceRelayPromote(${rid}) — promoted as relay by ${data.voiceNodeId}, current parent=${r.parentId||'(none)'}, incoming siblings: ${(data.incomingSiblings||[]).join(', ')||'(none)'}`);
+
+  // Register the voice node as a pending adopter so checkVoiceAdoptAffinity
+  // accepts it directly without redirecting to same-channel peers.
+  if (!r._pendingVoiceAdopters) r._pendingVoiceAdopters = new Set();
+  r._pendingVoiceAdopters.add(data.voiceNodeId);
+
+  // Detach from our current parent (may be the voice node itself, or any
+  // other node). We need to be parentless so the voice node can adopt us
+  // as its child (making us C's parent in the new topology).
+  if (r.parentId) {
+    if (r.parentConn?.open) {
+      try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
+    }
+    r.parentId         = null;
+    r.parentConn       = null;
+    r.grandparentId    = null;
+    r.distanceFromRoot = 0;
+  }
+
+  // Do NOT set _joiningParent=true here. The relay is becoming a root that
+  // accepts incoming adopt_requests — it is not seeking a parent itself.
+  // _joiningParent=true would block becomeRoot's suppression logic but would
+  // also prevent normal recovery if the voice node never arrives.
+  r._joiningParent     = false;
+  r._becomeRootRetries = 0;
+
+  import('./mesh.js').then(mesh => {
+    mesh.updateClusterMapSelf(rid);
+    mesh.broadcastClusterMap(rid);
+  });
+
+  for (const sibId of (data.incomingSiblings || [])) {
+    console.log(`[voice] handleVoiceRelayPromote(${rid}) — expecting adopt_request from sibling ${sibId}`);
+  }
 }
 
 // ─── VOICE INTENT BROADCAST ───────────────────────────────────────────────────
@@ -294,6 +432,15 @@ function broadcastVoiceIntent(rid) {
  */
 export function checkVoiceAdoptAffinity(rid, requesterVoiceChannelId, conn) {
   const r = state.rooms[rid]; if (!r) return { allow: true, redirectTo: null, reason: 'no room' };
+
+  // If this node was promoted as a relay and the requester is the expected
+  // voice node, accept unconditionally — redirecting would send A back to one
+  // of A's own descendants (cycle). Clear the pending entry after accepting.
+  if (r._pendingVoiceAdopters?.has(conn.peer)) {
+    r._pendingVoiceAdopters.delete(conn.peer);
+    console.log(`[voice] checkVoiceAdoptAffinity — accepting pending voice adopter ${conn.peer} (relay handshake)`);
+    return { allow: true, redirectTo: null, reason: 'pending voice adopter' };
+  }
 
   const myVcId  = r.myVoiceChannelId || null;
   const reqVcId = requesterVoiceChannelId || null;

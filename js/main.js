@@ -18,7 +18,7 @@ import {
 } from './mesh.js';
 import { handleElectionStart, handleElectionVote, handleElectionWon, startLocalElection } from './election.js';
 import { handleIncomingMessage, handleMsgAck, addSystemMsg, displayMessage, flushPendingMessages, onTyping, handleTyping } from './messaging.js';
-import { handleVoiceChannelCreated, handleVoiceData, handleVoiceBinary, handleBecomeMyChild, handleVoiceEvictChildren } from './voice.js';
+import { handleVoiceChannelCreated, handleVoiceData, handleVoiceBinary, handleBecomeMyChild, handleVoiceEvictChildren, handleVoiceRelayPromote } from './voice.js';
 import { handleChannelCreated, switchChannel, createRoom, createChannel, joinRoomViaInvite,
          confirmLeaveRoom, leaveRoom, showInvite, copyInviteLink, checkJoinUrl,
          backToRooms, switchRoom, handlePeerLeaving } from './rooms.js';
@@ -251,6 +251,9 @@ export function handleChatData(data, conn) {
       break;
     case 'voice_evict_children':
       if (rid) handleVoiceEvictChildren(data);
+      break;
+    case 'voice_relay_promote':
+      if (rid) handleVoiceRelayPromote(data);
       break;
   }
 }

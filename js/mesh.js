@@ -74,23 +74,19 @@ function parentScore(entry) {
 }
 
 // ─── JOIN CLUSTER ─────────────────────────────────────────────────────────────
-export function findAndJoinParent(rid, { force = false, excludeIds = [] } = {}) {
+export function findAndJoinParent(rid) {
   const r = state.rooms[rid]; if (!r) return;
   if (r.parentId || r.childIds.length) {
     console.log(`[mesh] findAndJoinParent(${rid}) skipped — already placed (parent=${r.parentId}, children=${r.childIds.length})`);
     return;
   }
-  if (r._joiningParent && !force) {
+  if (r._joiningParent) {
     console.log(`[mesh] findAndJoinParent(${rid}) skipped — join already in progress`);
     return;
   }
   r._joiningParent = true;
 
-  const excludeSet = new Set(excludeIds);
-  const mapEntries = Object.entries(r.clusterMap).filter(([p]) => p !== state.myId && !excludeSet.has(p));
-  if (excludeSet.size) {
-    console.log(`[mesh] findAndJoinParent(${rid}) — excluding recently-evicted peers: ${[...excludeSet].join(', ')}`);
-  }
+  const mapEntries = Object.entries(r.clusterMap).filter(([p]) => p !== state.myId);
   console.log(`[mesh] findAndJoinParent(${rid}) — clusterMap has ${mapEntries.length} peers:`,
     mapEntries.map(([p, e]) => `${e.name||p}(dist=${e.distance},children=${e.childCount??e.connCount??'?'})`).join(', ') || '(none)');
 
@@ -828,18 +824,28 @@ export function attemptRoomReconnect(rid) {
   r.grandparentId    = null;
   r.distanceFromRoot = 0;
 
-  let gotResponse = false;
-  toTry.slice(0, 3).forEach(id => {
+  // Try peers one at a time rather than in parallel. Parallel attempts race
+  // each other: the second connection opening triggers setupChatConn which
+  // can replace a peerConns slot, and when that connection later closes it
+  // fires handlePeerDisconnect on the peer we just adopted as our parent.
+  let tryIdx = 0;
+  const tryNext = () => {
+    if (tryIdx >= Math.min(toTry.length, 3)) {
+      // All candidates exhausted — schedule a long timeout as last resort
+      return;
+    }
+    const id = toTry[tryIdx++];
     state.cb.connectTo?.(id, conn => {
-      if (!gotResponse) {
-        gotResponse = true;
-        console.log(`[mesh] attemptRoomReconnect(${rid}) — connected to ${id}, sending cluster_map_request`);
-        conn.send({ type: 'cluster_map_request', roomId: rid, id: state.myId, name: state.myName });
-      }
+      console.log(`[mesh] attemptRoomReconnect(${rid}) — connected to ${id}, sending cluster_map_request`);
+      conn.send({ type: 'cluster_map_request', roomId: rid, id: state.myId, name: state.myName });
+      // Do NOT try more peers — one connection is enough to get the cluster map
+      // and trigger findAndJoinParent via handleClusterMap.
     }, () => {
-      console.log(`[mesh] attemptRoomReconnect(${rid}) — connect to ${id} failed`);
+      console.log(`[mesh] attemptRoomReconnect(${rid}) — connect to ${id} failed, trying next`);
+      tryNext();
     });
-  });
+  };
+  tryNext();
 
   // Wait long enough for a normal join (ICE + adopt) to complete before
   // concluding we are isolated. 12 s covers TURN negotiation (up to ~10 s)
