@@ -490,19 +490,21 @@ function findNonVoiceParentCandidate(rid, excludeId = null) {
   return best;
 }
 
+
 // ─── LOCAL AUDIO ──────────────────────────────────────────────────────────────
 async function startLocalAudio() {
-  if (voiceState.localStream) return; // already running
-  voiceState.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-  // Capture context — only used for VAD analyser; not for playback
-  voiceState.captureCtx  = new AudioContext();
-  // Playback context created lazily on first received chunk (_ensurePlayCtx)
-  _startMediaRecorder();
+  if (voiceState.localStream) return;
+  voiceState.localStream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    video: false,
+  });
+  voiceState.captureCtx = new AudioContext({ sampleRate: 48000 });
+  _startCapture();
   console.log('[voice] local audio started');
 }
 
 function stopLocalAudio() {
-  _stopMediaRecorder();
+  _stopCapture();
   if (voiceState.localStream) {
     voiceState.localStream.getTracks().forEach(t => t.stop());
     voiceState.localStream = null;
@@ -511,13 +513,15 @@ function stopLocalAudio() {
     voiceState.captureCtx.close().catch(() => {});
     voiceState.captureCtx = null;
   }
-  // Leave playCtx open — peer audio may still be in flight
   console.log('[voice] local audio stopped');
 }
 
 function stopAllPeerAudio() {
-  // Clear all jitter-buffer playheads
   for (const k of Object.keys(_peerPlayhead)) delete _peerPlayhead[k];
+  for (const [pid, dec] of Object.entries(_opusDecoders)) {
+    try { dec.close(); } catch {}
+    delete _opusDecoders[pid];
+  }
   if (voiceState.playCtx) {
     voiceState.playCtx.close().catch(() => {});
     voiceState.playCtx = null;
@@ -525,55 +529,162 @@ function stopAllPeerAudio() {
   }
 }
 
-// ─── RAW PCM CAPTURE (ScriptProcessorNode) ───────────────────────────────────
-// Uses ScriptProcessorNode to capture raw Float32 PCM from the mic, applies a
-// low-pass FIR filter before downsampling (prevents aliasing), converts to
-// Int16, base64-encodes, and sends.  Receiver uses a jitter buffer with
-// scheduled playback so chunks play gaplessly without overlap clicking.
+// ─── CAPTURE — WebCodecs Opus (primary) + ScriptProcessor PCM (fallback) ─────
+//
+// Primary path (Chrome 94+, Firefox 130+, Safari 18+):
+//   AudioWorkletNode feeds 20ms PCM frames to AudioEncoder (Opus).
+//   Each EncodedAudioChunk is an independent Opus frame — no container,
+//   no init segment, every frame decodable on its own.
+//
+// Fallback path (older browsers):
+//   ScriptProcessorNode + FIR low-pass filter + Int16 PCM at 24 kHz.
 
-const TARGET_SAMPLE_RATE = 24000; // 24 kHz — clearer voice, still low bandwidth
-const SCRIPT_BUFFER_SIZE = 2048;  // smaller buffer = lower latency (~42ms @48kHz)
-const VAD_THRESHOLD      = 0.008; // slightly more sensitive than before
+const OPUS_SAMPLE_RATE = 48000;
+const OPUS_BITRATE     = 32000;  // 32 kbps — excellent voice quality
 
+let _audioEncoder   = null;
+let _captureWorklet = null;
 let _scriptProcessor = null;
-let _analyserNode    = null;
-let _vadBuffer       = null;
+let _analyserNode   = null;
+let _vadBuffer      = null;
+let _useOpus        = false;
 
-// Simple windowed-sinc low-pass FIR — cutoff at TARGET_SAMPLE_RATE/2,
-// applied before decimation to prevent aliasing artifacts ("static").
-function _buildLowPassKernel(nativeSR, targetSR) {
-  const ratio   = targetSR / nativeSR;
-  const cutoff  = ratio * 0.9;           // 90% of Nyquist — small transition band
-  const taps    = 31;                    // odd number, linear phase
-  const half    = Math.floor(taps / 2);
-  const kernel  = new Float32Array(taps);
-  for (let i = 0; i < taps; i++) {
-    const n = i - half;
-    const sinc = n === 0 ? 1 : Math.sin(Math.PI * cutoff * n) / (Math.PI * cutoff * n);
-    // Hamming window
-    const w = 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (taps - 1));
-    kernel[i] = sinc * w;
+// Inline AudioWorklet processor — registered at runtime via a Blob URL.
+// Buffers mic samples into 20ms (960-sample) frames, computes RMS on each
+// frame, and posts frames above the silence floor to the main thread.
+// Doing VAD here (in the worklet) means we measure the actual frame energy,
+// not a lagged analyser snapshot which can drop consonants and word endings.
+const VAD_FLOOR = 0.002; // very low floor — only suppress near-silence/noise
+                          // Opus DTX handles true silence compression on its own
+
+const _WORKLET_CODE = `
+class MicCaptureProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this._buf = [];
+    this._frameSize = 960; // 20ms at 48kHz
+    this._vadFloor  = ${VAD_FLOOR};
   }
-  // Normalise to unit gain at DC
+  process(inputs) {
+    const ch = inputs[0]?.[0];
+    if (!ch) return true;
+    for (let i = 0; i < ch.length; i++) this._buf.push(ch[i]);
+    while (this._buf.length >= this._frameSize) {
+      const frame = new Float32Array(this._buf.splice(0, this._frameSize));
+      // Compute RMS on the frame itself — accurate and zero-lag
+      let sumSq = 0;
+      for (let i = 0; i < frame.length; i++) sumSq += frame[i] * frame[i];
+      const rms = Math.sqrt(sumSq / frame.length);
+      if (rms >= this._vadFloor) {
+        this.port.postMessage(frame, [frame.buffer]);
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('mic-capture', MicCaptureProcessor);
+`;
+
+async function _startCapture() {
+  if (!voiceState.localStream || !voiceState.captureCtx) return;
+
+  // Try WebCodecs Opus path first
+  if (typeof AudioEncoder !== 'undefined' && typeof AudioDecoder !== 'undefined') {
+    try {
+      const support = await AudioEncoder.isConfigSupported({
+        codec: 'opus', sampleRate: OPUS_SAMPLE_RATE, numberOfChannels: 1,
+        bitrate: OPUS_BITRATE,
+      });
+      if (support.supported) {
+        await _startOpusCapture();
+        _useOpus = true;
+        console.log('[voice] capture: WebCodecs Opus active (32kbps)');
+        return;
+      }
+    } catch (e) {
+      console.warn('[voice] WebCodecs Opus unavailable, using PCM fallback:', e.message);
+    }
+  }
+
+  _startPcmCapture();
+  _useOpus = false;
+  console.log('[voice] capture: ScriptProcessor PCM fallback active');
+}
+
+async function _startOpusCapture() {
+  const ctx    = voiceState.captureCtx;
+  const source = ctx.createMediaStreamSource(voiceState.localStream);
+
+  const blob    = new Blob([_WORKLET_CODE], { type: 'application/javascript' });
+  const blobUrl = URL.createObjectURL(blob);
+  await ctx.audioWorklet.addModule(blobUrl);
+  URL.revokeObjectURL(blobUrl);
+
+  _captureWorklet = new AudioWorkletNode(ctx, 'mic-capture');
+  source.connect(_captureWorklet);
+  const silentGain = ctx.createGain(); silentGain.gain.value = 0;
+  _captureWorklet.connect(silentGain); silentGain.connect(ctx.destination);
+
+  _audioEncoder = new AudioEncoder({
+    output: (chunk) => {
+      const buf = new ArrayBuffer(chunk.byteLength);
+      chunk.copyTo(buf);
+      _routeVoiceChunk(buf, 'opus');
+    },
+    error: (e) => console.warn('[voice] AudioEncoder error:', e),
+  });
+
+  _audioEncoder.configure({
+    codec: 'opus', sampleRate: OPUS_SAMPLE_RATE, numberOfChannels: 1,
+    bitrate: OPUS_BITRATE,
+  });
+
+  // Frames arrive pre-filtered by the worklet's VAD floor — just encode them.
+  _captureWorklet.port.onmessage = (e) => {
+    if (voiceState.muted) return;
+    const pcmFrame  = e.data; // Float32Array, 960 samples, VAD already applied
+    const audioData = new AudioData({
+      format: 'f32', sampleRate: OPUS_SAMPLE_RATE,
+      numberOfFrames: pcmFrame.length, numberOfChannels: 1,
+      timestamp: performance.now() * 1000,
+      data: pcmFrame,
+    });
+    _audioEncoder.encode(audioData);
+    audioData.close();
+  };
+}
+
+// ─── FALLBACK: ScriptProcessorNode + FIR low-pass + Int16 PCM ────────────────
+const TARGET_SAMPLE_RATE = 24000;
+const SCRIPT_BUFFER_SIZE = 2048;
+
+function _buildLowPassKernel(nativeSR, targetSR) {
+  const ratio  = targetSR / nativeSR;
+  const cutoff = ratio * 0.9;
+  const taps   = 31;
+  const half   = Math.floor(taps / 2);
+  const kernel = new Float32Array(taps);
+  for (let i = 0; i < taps; i++) {
+    const n    = i - half;
+    const sinc = n === 0 ? 1 : Math.sin(Math.PI * cutoff * n) / (Math.PI * cutoff * n);
+    const w    = 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (taps - 1));
+    kernel[i]  = sinc * w;
+  }
   const sum = kernel.reduce((a, b) => a + b, 0);
   for (let i = 0; i < taps; i++) kernel[i] /= sum;
   return kernel;
 }
 
-function _startMediaRecorder() {
+function _startPcmCapture() {
   if (!voiceState.localStream || !voiceState.captureCtx) return;
-
   const ctx        = voiceState.captureCtx;
   const source     = ctx.createMediaStreamSource(voiceState.localStream);
   const nativeSR   = ctx.sampleRate;
   const downsample = Math.max(1, Math.round(nativeSR / TARGET_SAMPLE_RATE));
   const lpKernel   = _buildLowPassKernel(nativeSR, TARGET_SAMPLE_RATE);
   const kernelLen  = lpKernel.length;
-  const halfKernel = Math.floor(kernelLen / 2);
-
-  // Ring buffer for FIR convolution state across ScriptProcessor callbacks
-  const ringBuf = new Float32Array(kernelLen);
-  let ringPos   = 0;
+  const ringBuf    = new Float32Array(kernelLen);
+  let   ringPos    = 0;
 
   _analyserNode         = ctx.createAnalyser();
   _analyserNode.fftSize = 256;
@@ -582,61 +693,55 @@ function _startMediaRecorder() {
 
   _scriptProcessor = ctx.createScriptProcessor(SCRIPT_BUFFER_SIZE, 1, 1);
   source.connect(_scriptProcessor);
-
-  const muteGain = ctx.createGain();
-  muteGain.gain.value = 0;
-  _scriptProcessor.connect(muteGain);
-  muteGain.connect(ctx.destination);
+  const muteGain = ctx.createGain(); muteGain.gain.value = 0;
+  _scriptProcessor.connect(muteGain); muteGain.connect(ctx.destination);
 
   _scriptProcessor.onaudioprocess = (e) => {
+    if (voiceState.muted) return;
     const input = e.inputBuffer.getChannelData(0);
-
-    // VAD check
     _analyserNode.getFloatTimeDomainData(_vadBuffer);
     let sumSq = 0;
     for (let i = 0; i < _vadBuffer.length; i++) sumSq += _vadBuffer[i] * _vadBuffer[i];
-    if (Math.sqrt(sumSq / _vadBuffer.length) < VAD_THRESHOLD) return;
+    if (Math.sqrt(sumSq / _vadBuffer.length) < VAD_FLOOR) return;
 
-    // Apply FIR low-pass then decimate
     const outLen = Math.floor(input.length / downsample);
     const pcm16  = new Int16Array(outLen);
-
     for (let outIdx = 0; outIdx < outLen; outIdx++) {
-      // Fill ring buffer with `downsample` new input samples
       for (let d = 0; d < downsample; d++) {
         ringBuf[ringPos] = input[outIdx * downsample + d];
         ringPos = (ringPos + 1) % kernelLen;
       }
-      // Convolve at this output sample position
       let acc = 0;
       for (let k = 0; k < kernelLen; k++) {
         acc += lpKernel[k] * ringBuf[(ringPos - 1 - k + kernelLen * 2) % kernelLen];
       }
-      const s   = Math.max(-1, Math.min(1, acc));
+      const s = Math.max(-1, Math.min(1, acc));
       pcm16[outIdx] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
-
-    const bytes  = new Uint8Array(pcm16.buffer);
-    let   binary = '';
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    _routeVoiceChunk(btoa(binary), TARGET_SAMPLE_RATE);
+    _routeVoiceChunk(pcm16.buffer, 'pcm16');
   };
-
-  console.log(`[voice] ScriptProcessor started — nativeSR:${nativeSR} downsample:${downsample}x -> ${TARGET_SAMPLE_RATE} Hz (FIR LP + jitter buffer)`);
 }
 
-function _stopMediaRecorder() {
+function _stopCapture() {
+  if (_audioEncoder) {
+    try { _audioEncoder.close(); } catch {}
+    _audioEncoder = null;
+  }
+  if (_captureWorklet) {
+    try { _captureWorklet.disconnect(); } catch {}
+    _captureWorklet = null;
+  }
   if (_scriptProcessor) {
     try { _scriptProcessor.disconnect(); } catch {}
     _scriptProcessor = null;
   }
   _analyserNode = null;
   _vadBuffer    = null;
+  _useOpus      = false;
 }
 
 // ─── ROUTE VOICE CHUNK ────────────────────────────────────────────────────────
-// b64 = base64-encoded Int16 PCM at sampleRate Hz.
-function _routeVoiceChunk(b64, sampleRate) {
+function _routeVoiceChunk(audioData, codec) {
   for (const [rid, r] of Object.entries(state.rooms)) {
     if (!r.myVoiceChannelId) continue;
     _markSpeaking(state.myId, rid);
@@ -648,12 +753,12 @@ function _routeVoiceChunk(b64, sampleRate) {
       authorId:   state.myId,
       authorName: state.myName,
       seq:        _voiceSeq++,
-      sampleRate,        // receiver needs this to build AudioBuffer
-      audio:      b64,   // base64-encoded Int16 PCM
+      codec,
+      sampleRate: codec === 'opus' ? OPUS_SAMPLE_RATE : TARGET_SAMPLE_RATE,
+      audio:      _bufToB64(audioData),
     };
 
     if (r.parentConn?.open) _sendVoicePacket(r.parentConn, packet);
-
     for (const cid of r.childIds) {
       const conn = r.childConns[cid] || state.peerConns[cid]?.conn;
       if (conn?.open) _sendVoicePacket(conn, packet);
@@ -661,28 +766,29 @@ function _routeVoiceChunk(b64, sampleRate) {
   }
 }
 
+function _bufToB64(buf) {
+  const bytes  = new Uint8Array(buf);
+  const CHUNK  = 8192;
+  let   binary = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
 function _sendVoicePacket(conn, packet) {
   try { conn.send(packet); } catch {}
 }
 
 // ─── RECEIVE VOICE DATA ───────────────────────────────────────────────────────
-// Each voice_data packet is self-contained (audio field is base64).
-// handleVoiceBinary is kept as a no-op stub so main.js import doesn't break.
-
 export function handleVoiceData(data, conn) {
-  const { roomId: rid, vcId, authorId, authorName, audio, sampleRate } = data;
+  const { roomId: rid, vcId, authorId, audio, sampleRate, codec } = data;
   const r = state.rooms[rid]; if (!r || !audio) return;
 
-  // Relay to other nodes — always relay regardless of whether we are in the
-  // voice channel, so intermediate/root nodes that are not voice participants
-  // still forward audio through the tree.
-  // Only skip relay if we are the original author (prevents echo loops).
   if (authorId !== state.myId) {
-    // Relay upstream (skip if packet came from parent to avoid sending it back)
     if (r.parentConn?.open && conn.peer !== r.parentId) {
       _sendVoicePacket(r.parentConn, data);
     }
-    // Relay downstream (skip the sender)
     for (const cid of r.childIds) {
       if (cid === conn.peer) continue;
       const c = r.childConns[cid] || state.peerConns[cid]?.conn;
@@ -690,33 +796,87 @@ export function handleVoiceData(data, conn) {
     }
   }
 
-  // Play locally if we're in this channel and it's not our own audio
   if (r.myVoiceChannelId === vcId && authorId !== state.myId && !voiceState.deafened) {
     _markSpeaking(authorId, rid);
-    _playVoiceChunk(authorId, audio, sampleRate);
+    if (codec === 'opus') {
+      _playOpusChunk(authorId, audio);
+    } else {
+      _playPcmChunk(authorId, audio, sampleRate);
+    }
   }
 }
 
-// Stub — binary frames are no longer sent; kept so main.js import compiles.
 export function handleVoiceBinary(buf, conn) {}
 
-// ─── AUDIO PLAYBACK — jitter-buffered scheduled playback ─────────────────────
-// Instead of src.start(0) (which plays every chunk "now", causing overlaps and
-// clicks), we maintain a per-peer playhead and schedule each chunk to start
-// exactly when the previous one ends.  A small initial buffer (JITTER_AHEAD_S)
-// absorbs network jitter; if we fall behind we resync to avoid compounding lag.
+// ─── PLAYBACK ─────────────────────────────────────────────────────────────────
+//
+// Per-peer jitter buffer using AudioContext scheduled playback.
+//
+// JITTER_AHEAD_S: how far ahead of "now" we schedule the first frame for a peer.
+//   Larger = more latency but fewer cut-offs on late packets.
+//   150ms covers multi-hop relay latency (each PeerJS hop adds ~20–50ms).
+//
+// MAX_LAG_S: if the playhead falls this far behind current time, we've had a
+//   real gap (peer paused speaking, tab backgrounded, etc.) — resync forward.
+//   Kept generous to avoid false resyncs during short bursts.
+//
+// MIN_SCHEDULE_AHEAD_S: minimum time ahead of now to schedule a frame, to
+//   account for async AudioDecoder callback latency. Without this headroom,
+//   frames decoded asynchronously arrive after their scheduled start time and
+//   play immediately out of sequence, causing clicks and cut-offs.
 
-const JITTER_AHEAD_S   = 0.06;  // 60ms look-ahead buffer — absorbs typical jitter
-const MAX_LAG_S        = 0.25;  // if we're >250ms behind, resync playhead
+const JITTER_AHEAD_S      = 0.15;  // 150ms initial lookahead (was 60ms)
+const MAX_LAG_S           = 0.6;   // 600ms before resync (was 250ms)
+const MIN_SCHEDULE_AHEAD_S = 0.02; // 20ms minimum headroom (was 5ms)
 
-// Per-peer playhead: peerId → next scheduled AudioContext time
-const _peerPlayhead = {};
+const _peerPlayhead  = {};
+const _opusDecoders  = {};
 
-function _playVoiceChunk(peerId, b64, sampleRate) {
+function _ensureOpusDecoder(peerId) {
+  if (_opusDecoders[peerId] && _opusDecoders[peerId].state !== 'closed') {
+    return _opusDecoders[peerId];
+  }
+  const dec = new AudioDecoder({
+    output: (audioData) => {
+      const f32 = new Float32Array(audioData.numberOfFrames);
+      audioData.copyTo(f32, { planeIndex: 0 });
+      audioData.close();
+      _schedulePcmFrame(peerId, f32, OPUS_SAMPLE_RATE);
+    },
+    error: (e) => console.warn(`[voice] AudioDecoder(${peerId}):`, e),
+  });
+  dec.configure({ codec: 'opus', sampleRate: OPUS_SAMPLE_RATE, numberOfChannels: 1 });
+  _opusDecoders[peerId] = dec;
+  return dec;
+}
+
+function _playOpusChunk(peerId, b64) {
+  if (typeof AudioDecoder === 'undefined') return;
+  _ensurePlayCtx();
+  const dec = _ensureOpusDecoder(peerId);
+  if (!dec || dec.state === 'closed') return;
+
+  let buf;
+  try {
+    const binary = atob(b64);
+    buf = new ArrayBuffer(binary.length);
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  } catch (e) { return; }
+
+  try {
+    dec.decode(new EncodedAudioChunk({
+      type:      'key',  // every Opus frame is independently decodable
+      timestamp: performance.now() * 1000,
+      data:      buf,
+    }));
+  } catch (e) { console.warn('[voice] Opus decode error:', e.message); }
+}
+
+function _playPcmChunk(peerId, b64, sampleRate) {
   _ensurePlayCtx();
   const ctx = voiceState.playCtx;
   if (!ctx || ctx.state === 'closed') return;
-  if (voiceState.deafened) return;
 
   let pcm16;
   try {
@@ -724,34 +884,37 @@ function _playVoiceChunk(peerId, b64, sampleRate) {
     const bytes  = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     pcm16 = new Int16Array(bytes.buffer);
-  } catch (e) {
-    console.warn('[voice] base64 decode error:', e.message);
-    return;
-  }
+  } catch (e) { return; }
 
-  const numSamples = pcm16.length;
-  const sr         = sampleRate || TARGET_SAMPLE_RATE;
-  let   audioBuf;
-  try {
-    audioBuf = ctx.createBuffer(1, numSamples, sr);
-  } catch (e) {
-    console.warn('[voice] createBuffer error:', e.message);
-    return;
-  }
-  const f32 = audioBuf.getChannelData(0);
-  for (let i = 0; i < numSamples; i++) {
+  const f32 = new Float32Array(pcm16.length);
+  for (let i = 0; i < pcm16.length; i++) {
     f32[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7FFF);
   }
+  _schedulePcmFrame(peerId, f32, sampleRate || TARGET_SAMPLE_RATE);
+}
 
-  const chunkDuration = numSamples / sr;
+function _schedulePcmFrame(peerId, f32, sampleRate) {
+  const ctx = voiceState.playCtx;
+  if (!ctx || ctx.state === 'closed') return;
+
+  let audioBuf;
+  try { audioBuf = ctx.createBuffer(1, f32.length, sampleRate); } catch { return; }
+  audioBuf.getChannelData(0).set(f32);
+
+  const chunkDuration = f32.length / sampleRate;
   const now           = ctx.currentTime;
 
-  // Initialise or resync the playhead for this peer
   if (!_peerPlayhead[peerId] || _peerPlayhead[peerId] < now - MAX_LAG_S) {
+    // First frame for this peer, or we've been silent long enough to warrant a
+    // resync. Set the playhead far enough ahead to absorb decode async latency
+    // plus at least one full chunk duration of jitter buffer.
     _peerPlayhead[peerId] = now + JITTER_AHEAD_S;
   }
 
-  const startTime = Math.max(_peerPlayhead[peerId], now + 0.005);
+  // Ensure we never schedule in the past or within MIN_SCHEDULE_AHEAD_S of now.
+  // This is the critical guard against async AudioDecoder callbacks arriving
+  // after their target start time (which causes clips and sequence errors).
+  const startTime = Math.max(_peerPlayhead[peerId], now + MIN_SCHEDULE_AHEAD_S);
   _peerPlayhead[peerId] = startTime + chunkDuration;
 
   const src = ctx.createBufferSource();
@@ -759,6 +922,7 @@ function _playVoiceChunk(peerId, b64, sampleRate) {
   src.connect(voiceState.gainNode);
   src.start(startTime);
 }
+
 
 // ─── MUTE / DEAFEN ────────────────────────────────────────────────────────────
 export function toggleMute(rid) {

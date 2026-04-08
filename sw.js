@@ -1,4 +1,4 @@
-const CACHE = 'gilgamesh-v1.1';
+const CACHE = 'gilgamesh-v1.2';
 const PRECACHE = [
   './',
   './index.html',
