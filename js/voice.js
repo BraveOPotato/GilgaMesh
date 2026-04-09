@@ -945,22 +945,36 @@ export function isMuted()   { return voiceState.muted; }
 export function isDeafened(){ return voiceState.deafened; }
 
 // ─── FULLY PARTITIONED CLUSTER EDGE CASE ─────────────────────────────────────
-// If ALL nodes in the cluster are voice nodes and a regular node wants to join:
-// The new node asks the root to become ITS child, making the new node the root.
+// A non-voice node detected that ALL peers are in voice and sent become_my_child.
+// We (the root voice node) should adopt_request back to the sender so they
+// become our parent — making them the new non-voice root of the cluster.
 export function handleBecomeMyChild(data, conn) {
   const rid = data.roomId;
   const r   = state.rooms[rid]; if (!r) return;
-  // Only honour this if we are root
+
+  // Only the current root should handle this
   if (r.parentId) {
+    console.log(`[voice] handleBecomeMyChild(${rid}) — we are not root, rejecting`);
     try { conn.send({ type: 'become_my_child_reject', roomId: rid, reason: 'not_root' }); } catch {}
     return;
   }
-  console.log(`[voice] handleBecomeMyChild(${rid}) — ${data.requesterId} wants to become new root`);
 
-  // Send adopt_request to the requester (they become our parent)
+  console.log(`[voice] handleBecomeMyChild(${rid}) — ${data.requesterId} (${data.name||'?'}) will become our new parent`);
+
+  // Connect to the requester and send them an adopt_request so they accept us
+  // as their child. Their handleAdoptRequest will treat us normally (no voice
+  // affinity restriction because they are non-voice).
   state.cb.connectTo?.(data.requesterId, c => {
-    c.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName });
-  }, () => {});
+    c.send({
+      type:           'adopt_request',
+      roomId:         rid,
+      id:             state.myId,
+      name:           state.myName,
+      voiceChannelId: r.myVoiceChannelId || null,
+    });
+  }, () => {
+    console.warn(`[voice] handleBecomeMyChild(${rid}) — could not connect back to ${data.requesterId}`);
+  });
 }
 
 // ─── VOICE STATE ACCESSORS ───────────────────────────────────────────────────

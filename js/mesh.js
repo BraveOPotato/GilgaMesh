@@ -74,21 +74,39 @@ function parentScore(entry) {
 }
 
 // ─── JOIN CLUSTER ─────────────────────────────────────────────────────────────
-export function findAndJoinParent(rid) {
+export function findAndJoinParent(rid, { force = false, excludeIds = [] } = {}) {
   const r = state.rooms[rid]; if (!r) return;
   if (r.parentId || r.childIds.length) {
     console.log(`[mesh] findAndJoinParent(${rid}) skipped — already placed (parent=${r.parentId}, children=${r.childIds.length})`);
     return;
   }
-  if (r._joiningParent) {
+  if (r._joiningParent && !force) {
     console.log(`[mesh] findAndJoinParent(${rid}) skipped — join already in progress`);
     return;
   }
   r._joiningParent = true;
 
-  const mapEntries = Object.entries(r.clusterMap).filter(([p]) => p !== state.myId);
+  const excludeSet = new Set(excludeIds);
+  const mapEntries = Object.entries(r.clusterMap).filter(([p]) => p !== state.myId && !excludeSet.has(p));
+  if (excludeSet.size) {
+    console.log(`[mesh] findAndJoinParent(${rid}) — excluding recently-evicted peers: ${[...excludeSet].join(', ')}`);
+  }
   console.log(`[mesh] findAndJoinParent(${rid}) — clusterMap has ${mapEntries.length} peers:`,
     mapEntries.map(([p, e]) => `${e.name||p}(dist=${e.distance},children=${e.childCount??e.connCount??'?'})`).join(', ') || '(none)');
+
+  // ── All-voice-cluster check ────────────────────────────────────────────────
+  // If WE are not in a voice channel but every peer in the map IS, we cannot
+  // attach as a child of any voice node (they'd redirect us back to (none)).
+  // Instead find the root voice node and ask it to become OUR child via
+  // become_my_child, making us the new non-voice root of the cluster.
+  if (!r.myVoiceChannelId && mapEntries.length > 0) {
+    const allVoice = mapEntries.every(([, e]) => !!e.voiceChannelId);
+    if (allVoice) {
+      console.log(`[mesh] findAndJoinParent(${rid}) — all peers are voice nodes, sending become_my_child to root`);
+      _becomeMyChildRequest(rid, r, mapEntries);
+      return;
+    }
+  }
 
   const candidates = mapEntries
     .filter(([pid, e]) => {
@@ -121,6 +139,23 @@ export function findAndJoinParent(rid) {
     becomeRoot(rid); return;
   }
   tryParentCandidates(rid, sortedCandidates, 0);
+}
+
+// Send become_my_child to the root voice node so it adopts us as its parent.
+function _becomeMyChildRequest(rid, r, mapEntries) {
+  // Root is the voice node with distance === 0
+  const rootEntry = mapEntries.find(([, e]) => e.distance === 0);
+  const rootId    = rootEntry?.[0] ?? mapEntries.sort(([,a],[,b]) => a.distance - b.distance)[0]?.[0];
+  if (!rootId) { r._joiningParent = false; becomeRoot(rid); return; }
+
+  console.log(`[mesh] _becomeMyChildRequest(${rid}) — sending become_my_child to root ${rootId}`);
+  state.cb.connectTo?.(rootId, conn => {
+    conn.send({ type: 'become_my_child', roomId: rid, requesterId: state.myId, name: state.myName });
+  }, () => {
+    console.warn(`[mesh] _becomeMyChildRequest(${rid}) — could not reach root ${rootId}, becoming root`);
+    r._joiningParent = false;
+    becomeRoot(rid);
+  });
 }
 
 function tryParentCandidates(rid, candidates, idx) {
@@ -404,14 +439,25 @@ export function handleAdoptRedirect(data) {
   console.log(`[mesh] handleAdoptRedirect(${rid}) — redirected to ${data.targetId || '(none)'}`);
   if (r) r._joiningParent = false;
   if (!data.targetId) {
-    // No redirect target — retry the full candidate search
+    // No redirect target. Check if this is the all-voice-cluster case:
+    // every peer in the map is a voice node, so normal adoption is impossible.
+    // If so, send become_my_child to the root rather than looping forever.
+    if (r && !r.myVoiceChannelId) {
+      const mapEntries = Object.entries(r.clusterMap).filter(([p]) => p !== state.myId);
+      const allVoice   = mapEntries.length > 0 && mapEntries.every(([, e]) => !!e.voiceChannelId);
+      if (allVoice) {
+        console.log(`[mesh] handleAdoptRedirect(${rid}) — all peers are voice nodes, switching to become_my_child`);
+        _becomeMyChildRequest(rid, r, mapEntries);
+        return;
+      }
+    }
+    // Normal case — retry the full candidate search
     setTimeout(() => findAndJoinParent(rid), RECONNECT_DELAY);
     return;
   }
   state.cb.connectTo?.(data.targetId, conn => {
     conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName, voiceChannelId: state.rooms[rid]?.myVoiceChannelId || null });
   }, () => {
-    // Connect to redirect target failed — retry the full candidate search
     setTimeout(() => findAndJoinParent(rid), RECONNECT_DELAY);
   });
 }
