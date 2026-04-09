@@ -141,21 +141,40 @@ export function findAndJoinParent(rid, { force = false, excludeIds = [] } = {}) 
   tryParentCandidates(rid, sortedCandidates, 0);
 }
 
-// Send become_my_child to the root voice node so it adopts us as its parent.
+// Send become_my_child to ALL voice peers — only the actual root will respond.
+// Non-root voice nodes reject the message in handleBecomeMyChild.
+// We cannot reliably identify the root from distance fields alone since the
+// clusterMap may have been sent by a non-root peer with stale distance values.
 function _becomeMyChildRequest(rid, r, mapEntries) {
-  // Root is the voice node with distance === 0
-  const rootEntry = mapEntries.find(([, e]) => e.distance === 0);
-  const rootId    = rootEntry?.[0] ?? mapEntries.sort(([,a],[,b]) => a.distance - b.distance)[0]?.[0];
-  if (!rootId) { r._joiningParent = false; becomeRoot(rid); return; }
+  if (!mapEntries.length) { r._joiningParent = false; becomeRoot(rid); return; }
 
-  console.log(`[mesh] _becomeMyChildRequest(${rid}) — sending become_my_child to root ${rootId}`);
-  state.cb.connectTo?.(rootId, conn => {
-    conn.send({ type: 'become_my_child', roomId: rid, requesterId: state.myId, name: state.myName });
-  }, () => {
-    console.warn(`[mesh] _becomeMyChildRequest(${rid}) — could not reach root ${rootId}, becoming root`);
-    r._joiningParent = false;
+  // Pre-authorize every voice peer. Only the root will actually send back an
+  // adopt_request; the others reject silently. _pendingVoiceAdopters entries
+  // are consumed on first use, so only one adopt_request gets the bypass.
+  if (!r._pendingVoiceAdopters) r._pendingVoiceAdopters = new Set();
+  for (const [pid] of mapEntries) r._pendingVoiceAdopters.add(pid);
+
+  console.log(`[mesh] _becomeMyChildRequest(${rid}) — broadcasting become_my_child to ${mapEntries.length} voice peer(s): ${mapEntries.map(([p])=>p).join(', ')}`);
+
+  for (const [pid] of mapEntries) {
+    state.cb.connectTo?.(pid, conn => {
+      conn.send({ type: 'become_my_child', roomId: rid, requesterId: state.myId, name: state.myName });
+    }, () => {
+      // If we can't reach this peer, remove its pre-authorization
+      r._pendingVoiceAdopters?.delete(pid);
+    });
+  }
+
+  // Safety valve: if no root responds within 8s, clear pre-authorizations and
+  // become root ourselves (cluster may have fully disconnected).
+  setTimeout(() => {
+    const rr = state.rooms[rid];
+    if (!rr || rr.parentId || rr.childIds.length) return; // already placed
+    console.warn(`[mesh] _becomeMyChildRequest(${rid}) — no root responded, becoming root`);
+    for (const [pid] of mapEntries) rr._pendingVoiceAdopters?.delete(pid);
+    rr._joiningParent = false;
     becomeRoot(rid);
-  });
+  }, 8000);
 }
 
 function tryParentCandidates(rid, candidates, idx) {
