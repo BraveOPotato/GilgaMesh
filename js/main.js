@@ -32,6 +32,7 @@ import {
   handleMentionInput, moveMentionSelection, confirmMention, closeMentionPopup,
   renderMentionText,
   openCallView, closeCallView, expandCallTile, fullscreenTile,
+  setReplyTarget, clearReplyTarget, scrollToMessage,
 } from './ui.js';
 import { copyToClipboard, escapeHtml } from './utils.js';
 import { SCORE_WINDOW } from './constants.js';
@@ -348,14 +349,16 @@ function showAddChannel() {
 function manualConnect() {
   const peerInput = document.getElementById('connect-peer-id');
   const roomInput = document.getElementById('connect-room-id');
-  const pid = peerInput.value.trim();
-  const rid = roomInput?.value.trim() || '';
+  const nameInput = document.getElementById('connect-room-name');
+  const pid  = peerInput.value.trim();
+  const rid  = roomInput?.value.trim() || '';
+  const rname = nameInput?.value.trim() || '';
   if (!pid) { toast('Enter a Peer ID', 'error'); return; }
-  peerInput.value = ''; if (roomInput) roomInput.value = '';
+  peerInput.value = ''; if (roomInput) roomInput.value = ''; if (nameInput) nameInput.value = '';
 
   if (rid) {
     if (!state.rooms[rid]) {
-      state.rooms[rid] = makeRoomShell(rid, 'Room ' + rid, null);
+      state.rooms[rid] = makeRoomShell(rid, rname || ('Room ' + rid), null);
       saveStorage(); renderRoomList();
     }
     import('./peer.js').then(p => {
@@ -422,6 +425,9 @@ Object.assign(window, {
   _gmActiveRoomId: () => state.activeRoomId,
   copyShareLink,
   _gmCopyText: btn => copyText(btn),
+  _gmReply: (msgId, author, content) => setReplyTarget(msgId, author, content),
+  _gmScrollToMsg: (msgId) => scrollToMessage(msgId),
+  _gmClearReply: () => clearReplyTarget(),
   openManageCandidates: () => {
     if (!state.activeRoomId) return;
     renderManageList();

@@ -26,6 +26,9 @@ export const state = {
   // Mention autocomplete
   mentionState: { active: false, start: -1, query: '', selected: 0, matches: [] },
 
+  // Active reply target: { id, author, content } or null
+  replyingTo:   null,
+
   // File shares (global, not per-room)
   fileShares:   {},   // token → { file, expires, filename, size, mime }
 

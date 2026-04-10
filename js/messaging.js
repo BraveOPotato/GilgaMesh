@@ -39,10 +39,16 @@ export function sendMessage() {
     channel:  state.activeChannel,
     ts:       Date.now(),
     originId: state.myId,
+    replyTo:  state.replyingTo || undefined,
   };
 
   input.value = ''; input.style.height = '';
   document.getElementById('send-btn').disabled = true;
+  // Clear reply state after capturing it into the message
+  if (state.replyingTo) {
+    state.replyingTo = null;
+    import('./ui.js').then(ui => ui.clearReplyTarget());
+  }
 
   const isRoot = !state.rooms[state.activeRoomId]?.parentId;
 

@@ -5,6 +5,133 @@ import { genId } from './ids.js';
 import { roomIsRoot, totalConnCount } from './state.js';
 import { saveStorage } from './storage.js';
 
+// ─── MARKDOWN RENDERER ────────────────────────────────────────────────────────
+// Inline-only markdown: **bold**, *italic*, ~~strike~~, `code`, [link](url),
+// and block-level: ``` fenced code, > blockquote, - / * / 1. lists, # headings.
+// All HTML in user content is escaped before parsing so injection is impossible.
+function renderMarkdown(raw) {
+  if (!raw) return '';
+
+  const lines  = raw.split('\n');
+  const out    = [];
+  let   i      = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Fenced code block
+    if (line.trimStart().startsWith('```')) {
+      const lang = line.trimStart().slice(3).trim();
+      const code = [];
+      i++;
+      while (i < lines.length && !lines[i].trimStart().startsWith('```')) {
+        code.push(escapeHtml(lines[i]));
+        i++;
+      }
+      out.push(`<pre class="md-pre"><code class="md-code${lang ? ` lang-${escapeHtml(lang)}` : ''}">${code.join('\n')}</code></pre>`);
+      i++; continue;
+    }
+
+    // Blockquote
+    if (line.startsWith('> ')) {
+      const qlines = [];
+      while (i < lines.length && lines[i].startsWith('> ')) {
+        qlines.push(lines[i].slice(2));
+        i++;
+      }
+      out.push(`<blockquote class="md-blockquote">${renderMarkdown(qlines.join('\n'))}</blockquote>`);
+      continue;
+    }
+
+    // Headings
+    const hMatch = line.match(/^(#{1,3})\s+(.*)/);
+    if (hMatch) {
+      const level = hMatch[1].length;
+      out.push(`<h${level} class="md-h${level}">${inlineMarkdown(hMatch[2])}</h${level}>`);
+      i++; continue;
+    }
+
+    // Unordered list
+    if (/^[-*]\s/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^[-*]\s/.test(lines[i])) {
+        items.push(`<li>${inlineMarkdown(lines[i].slice(2))}</li>`);
+        i++;
+      }
+      out.push(`<ul class="md-ul">${items.join('')}</ul>`);
+      continue;
+    }
+
+    // Ordered list
+    if (/^\d+\.\s/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
+        items.push(`<li>${inlineMarkdown(lines[i].replace(/^\d+\.\s/, ''))}</li>`);
+        i++;
+      }
+      out.push(`<ol class="md-ol">${items.join('')}</ol>`);
+      continue;
+    }
+
+    // Blank line → paragraph break (just a spacer)
+    if (line.trim() === '') { out.push('<div class="md-spacer"></div>'); i++; continue; }
+
+    // Normal paragraph line
+    out.push(`<p class="md-p">${inlineMarkdown(line)}</p>`);
+    i++;
+  }
+
+  return out.join('');
+}
+
+function inlineMarkdown(text) {
+  // Escape HTML first, then apply inline patterns
+  let s = escapeHtml(text);
+  // Inline code (must come before bold/italic to avoid re-parsing)
+  s = s.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
+  // Bold+italic ***text***
+  s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  // Bold **text**
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic *text* or _text_
+  s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  s = s.replace(/_([^_]+)_/g, '<em>$1</em>');
+  // Strikethrough ~~text~~
+  s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  // Links [text](url)
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a class="md-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // Bare URLs
+  s = s.replace(/(^|[^"=])(https?:\/\/[^\s<>"]+)/g, '$1<a class="md-link" href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+  return s;
+}
+
+// ─── REPLY HELPERS ────────────────────────────────────────────────────────────
+export function setReplyTarget(msgId, author, content) {
+  state.replyingTo = { id: msgId, author, content };
+  const bar = document.getElementById('reply-bar');
+  if (bar) {
+    document.getElementById('reply-bar-author').textContent = author;
+    document.getElementById('reply-bar-preview').textContent = content.length > 80 ? content.slice(0, 80) + '…' : content;
+    bar.classList.remove('hidden');
+    document.getElementById('msg-input').focus();
+  }
+}
+
+export function clearReplyTarget() {
+  state.replyingTo = null;
+  document.getElementById('reply-bar')?.classList.add('hidden');
+}
+
+export function scrollToMessage(msgId) {
+  // Search all msg-body elements for the target id
+  const el = document.getElementById('msg-' + msgId);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('msg-highlight');
+    setTimeout(() => el.classList.remove('msg-highlight'), 1800);
+  }
+}
+
 // ─── THEME ────────────────────────────────────────────────────────────────────
 export function initTheme() {
   applyTheme(localStorage.getItem('gilgamesh_theme') || 'dark', false);
@@ -250,8 +377,9 @@ export function renderMessage(msg, doScroll = true) {
   const isRoot_   = r && !r.parentId && msg.authorId === state.myId;
   const isPending = !!msg.pending;
 
+  // Replies break grouping — always start a new group if this message is a reply
   const last  = C.lastElementChild;
-  const sameA = last && last.dataset.authorId === msg.authorId && (msg.ts - parseInt(last.dataset.ts || '0')) < 120000;
+  const sameA = !msg.replyTo && last && last.dataset.authorId === msg.authorId && (msg.ts - parseInt(last.dataset.ts || '0')) < 120000;
   const group = sameA ? last : document.createElement('div');
 
   if (!sameA) {
@@ -295,10 +423,45 @@ export function renderMessage(msg, doScroll = true) {
       }, 1000);
     }
   } else {
+    // Reply preview (if this message is a reply)
+    if (msg.replyTo) {
+      const rp = document.createElement('div');
+      rp.className = 'msg-reply-preview';
+      rp.innerHTML = `<span class="msg-reply-author">${escapeHtml(msg.replyTo.author)}</span><span class="msg-reply-content">${escapeHtml((msg.replyTo.content || '').slice(0, 100))}</span>`;
+      rp.title = 'Jump to original message';
+      rp.onclick = () => window._gmScrollToMsg(msg.replyTo.id);
+      body.appendChild(rp);
+    }
+
     const span = document.createElement('span'); span.className = 'msg-text';
-    span.innerHTML = renderMentionText(msg.content || '');
+    span.innerHTML = renderMarkdown(msg.content || '');
+
+    // Actions
     const acts = document.createElement('div'); acts.className = 'msg-actions';
-    acts.innerHTML = `<button onclick="window._gmCopyText(this)" data-text="${escapeHtml(msg.content)}">⎘</button>`;
+    const replyBtn = document.createElement("button");
+    replyBtn.textContent = "↩";
+    replyBtn.title = "Reply";
+
+    replyBtn.addEventListener("click", () => {
+      window._gmReply(
+        msg.id,
+        msg.author || "",
+        msg.content || ""
+      );
+    });
+
+    const copyBtn = document.createElement("button");
+    copyBtn.textContent = "⎘";
+    copyBtn.dataset.text = msg.content || "";
+
+    copyBtn.addEventListener("click", function () {
+      window._gmCopyText(this);
+    });
+
+    acts.innerHTML = "";
+    acts.appendChild(replyBtn);
+    acts.appendChild(copyBtn);
+
     body.appendChild(span); body.appendChild(acts);
   }
 
