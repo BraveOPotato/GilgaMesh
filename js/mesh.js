@@ -200,7 +200,10 @@ function tryParentCandidates(rid, candidates, idx) {
   }
 
   console.log(`[mesh] tryParentCandidates(${rid}) — trying candidate [${idx}] ${pid}`);
+  state.peerChecking.add(pid);
+  import('./ui.js').then(ui => { if (state.activeRoomId) ui.renderRoomSidebar(); });
   state.cb.connectTo?.(pid, conn => {
+    state.peerChecking.delete(pid);
     const rr = state.rooms[rid];
     if (rr?.parentId) {
       console.log(`[mesh] tryParentCandidates(${rid}) — connected to ${pid} but already parented to ${rr.parentId}, aborting`);
@@ -209,6 +212,8 @@ function tryParentCandidates(rid, candidates, idx) {
     console.log(`[mesh] tryParentCandidates(${rid}) — connected to ${pid}, sending adopt_request`);
     conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName, voiceChannelId: state.rooms[rid]?.myVoiceChannelId || null });
   }, () => {
+    state.peerChecking.delete(pid);
+    import('./ui.js').then(ui => { if (state.activeRoomId) ui.renderRoomSidebar(); });
     console.log(`[mesh] tryParentCandidates(${rid}) — connect to ${pid} failed, trying next`);
     setTimeout(() => tryParentCandidates(rid, candidates, idx + 1), RECONNECT_DELAY);
   });
@@ -700,6 +705,9 @@ function recoverProcedure(rid) {
   const decide = () => {
     if (decided) return;
     decided = true;
+    // Clear any checking indicators that are still showing
+    for (const pid of candidates) state.peerChecking.delete(pid);
+    import('./ui.js').then(ui => { if (state.activeRoomId) ui.renderRoomSidebar(); });
     // Re-check: join may have succeeded while we were waiting for responses
     const rr = state.rooms[rid];
     if (!rr || rr.parentId || rr.childIds.length) return;
@@ -751,9 +759,15 @@ function recoverProcedure(rid) {
     const req  = c => {
       try { c.send({ type: 'descendant_count_request', roomId: rid, requesterId: state.myId }); } catch {}
     };
-    if (conn?.open) req(conn);
+    if (conn?.open) { req(conn); }
     else {
-      state.cb.connectTo?.(pid, req, () => {
+      state.peerChecking.add(pid);
+      import('./ui.js').then(ui => { if (state.activeRoomId) ui.renderRoomSidebar(); });
+      state.cb.connectTo?.(pid, c => {
+        state.peerChecking.delete(pid);
+        req(c);
+      }, () => {
+        state.peerChecking.delete(pid);
         pending.delete(pid);
         if (pending.size === 0) { clearTimeout(collectTimer); decide(); }
       });
@@ -896,16 +910,17 @@ export function attemptRoomReconnect(rid) {
   let tryIdx = 0;
   const tryNext = () => {
     if (tryIdx >= Math.min(toTry.length, 3)) {
-      // All candidates exhausted — schedule a long timeout as last resort
       return;
     }
     const id = toTry[tryIdx++];
+    state.peerChecking.add(id);
+    import('./ui.js').then(ui => { if (state.activeRoomId) ui.renderRoomSidebar(); });
     state.cb.connectTo?.(id, conn => {
+      state.peerChecking.delete(id);
       console.log(`[mesh] attemptRoomReconnect(${rid}) — connected to ${id}, sending cluster_map_request`);
       conn.send({ type: 'cluster_map_request', roomId: rid, id: state.myId, name: state.myName });
-      // Do NOT try more peers — one connection is enough to get the cluster map
-      // and trigger findAndJoinParent via handleClusterMap.
     }, () => {
+      state.peerChecking.delete(id);
       console.log(`[mesh] attemptRoomReconnect(${rid}) — connect to ${id} failed, trying next`);
       tryNext();
     });

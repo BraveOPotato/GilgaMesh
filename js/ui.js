@@ -195,20 +195,21 @@ export function renderRoomSidebar() {
     if (aOnline !== bOnline) return bOnline ? 1 : -1; // online first
     return (a.name || a.id).localeCompare(b.name || b.id);
   }).map(p => {
-    const pc       = state.peerConns[p.id];
-    const alive    = !!(pc?.conn?.open);
-    const isParent = p.id === r.parentId;
-    const isChild  = r.childIds.includes(p.id);
-    const color    = stringToColor(p.id);
-    const role     = isParent ? 'parent' : isChild ? 'child' : '';
-    const dotClass = isParent ? 'server' : alive ? 'online' : 'offline';
-    return `<div class="peer-item${alive ? '' : ' peer-offline'}">
-      <div class="peer-avatar" style="background:${color}20;border-color:${color}${alive ? '40' : '20'};color:${color}${alive ? '' : ';opacity:.5'}">
+    const pc        = state.peerConns[p.id];
+    const alive     = !!(pc?.conn?.open);
+    const checking  = state.peerChecking.has(p.id);
+    const isParent  = p.id === r.parentId;
+    const isChild   = r.childIds.includes(p.id);
+    const color     = stringToColor(p.id);
+    const role      = isParent ? 'parent' : isChild ? 'child' : '';
+    const dotClass  = checking ? 'searching' : isParent ? 'server' : alive ? 'online' : 'offline';
+    return `<div class="peer-item${alive || checking ? '' : ' peer-offline'}">
+      <div class="peer-avatar" style="background:${color}20;border-color:${color}${alive || checking ? '40' : '20'};color:${color}${alive || checking ? '' : ';opacity:.5'}">
         ${(p.name || 'P').charAt(0).toUpperCase()}
         <div class="peer-status-dot ${dotClass}"></div>
       </div>
-      <span class="peer-name" style="${alive ? '' : 'opacity:.45'}">${escapeHtml(p.name || p.id)}</span>
-      ${role ? `<span class="peer-role">${role}</span>` : ''}
+      <span class="peer-name" style="${alive || checking ? '' : 'opacity:.45'}">${escapeHtml(p.name || p.id)}</span>
+      ${checking ? '<span class="peer-role" style="color:var(--accent);opacity:.7">checking…</span>' : role ? `<span class="peer-role">${role}</span>` : ''}
     </div>`;
   }).join('');
 }
@@ -746,11 +747,16 @@ export function toggleSidebar() {
   state.sidebarOpen = !state.sidebarOpen;
   document.getElementById('sidebar').classList.toggle('open', state.sidebarOpen);
   document.getElementById('sidebar-overlay').classList.toggle('visible', state.sidebarOpen);
+  // On mobile the room-rail is hidden behind the sidebar — slide both together
+  if (window.innerWidth <= 700) {
+    document.getElementById('room-rail').classList.toggle('open', state.sidebarOpen);
+  }
 }
 export function closeSidebar() {
   state.sidebarOpen = false;
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('sidebar-overlay').classList.remove('visible');
+  document.getElementById('room-rail').classList.remove('open');
 }
 export function openNetPanel() {
   state.netPanelOpen = true;

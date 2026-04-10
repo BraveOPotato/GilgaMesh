@@ -29,6 +29,9 @@ export const state = {
   // File shares (global, not per-room)
   fileShares:   {},   // token → { file, expires, filename, size, mime }
 
+  // Peers currently being contacted (shown as "checking..." in Members list)
+  peerChecking: new Set(),  // Set of peerIds currently being tried
+
   // Cross-module callbacks — populated by main.js at boot to break circular deps
   // Each is a function reference set after all modules load
   cb: {
