@@ -424,6 +424,15 @@ export function handleAdoptAck(data, conn) {
   r._joiningParent = false;
   r._becomeRootRetries = 0;
   r._becomeMyChildInFlight = false;
+
+  // Cycle guard: if the new parent was previously one of our children (can happen
+  // during a voice role-swap), remove it now so we never hold a peer as both.
+  if (r.childIds.includes(data.parentId)) {
+    console.log(`[mesh] handleAdoptAck(${rid}) — removing ${data.parentId} from childIds (role-swap: was child, now parent)`);
+    r.childIds = r.childIds.filter(id => id !== data.parentId);
+    delete r.childConns[data.parentId];
+  }
+
   r.parentId         = data.parentId;
   r.parentConn       = conn;
   r.grandparentId    = data.grandparentId ?? null;
@@ -857,9 +866,29 @@ export function handleBecomeParent(data) {
 export function handleReassignParent(data) {
   const rid = data.roomId, r = state.rooms[rid]; if (!r) return;
   if (r.recoveryLock > Date.now()) return;
+
+  // Detach from current parent before connecting to the new one.
+  // Without this, handleAdoptAck will see r.parentId !== data.parentId and
+  // send adopt_reject:already_parented, leaving us permanently stuck on the old parent.
+  if (r.parentId && r.parentId !== data.newParentId) {
+    console.log(`[mesh] handleReassignParent(${rid}) — detaching from current parent ${r.parentId} before moving to ${data.newParentId}`);
+    if (r.parentConn?.open) {
+      try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
+    }
+    r.parentId      = null;
+    r.parentConn    = null;
+    r.grandparentId = null;
+    r.distanceFromRoot = 0;
+    updateClusterMapSelf(rid);
+  }
+
   state.cb.connectTo?.(data.newParentId, conn => {
     conn.send({ type: 'adopt_request', roomId: rid, id: state.myId, name: state.myName, voiceChannelId: state.rooms[rid]?.myVoiceChannelId || null });
-  }, () => {});
+  }, () => {
+    // New parent unreachable — fall back to full parent search
+    console.warn(`[mesh] handleReassignParent(${rid}) — could not reach ${data.newParentId}, running findAndJoinParent`);
+    findAndJoinParent(rid, { force: true });
+  });
 }
 
 // ─── TOPOLOGY_REQUEST ─────────────────────────────────────────────────────────

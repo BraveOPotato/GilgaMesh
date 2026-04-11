@@ -280,13 +280,19 @@ async function rejoineVoiceSubtree(rid, vcId) {
       return;
     }
 
-    // No non-voice children — just detach upward and findAndJoinParent
-    if (r.parentId) {
-      if (r.parentConn?.open) {
-        try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
-      }
-      r.parentId = null; r.parentConn = null; r.grandparentId = null; r.distanceFromRoot = 0;
+    // No non-voice children to hand off.
+    // If we already have children (same-voice) AND/OR a parent, our tree
+    // position is already correct — just advertise the new voice state and
+    // stay put.  Detaching from the parent would leave us an orphaned root
+    // because findAndJoinParent skips when childIds.length > 0.
+    if (r.childIds.length > 0 || r.parentId) {
+      console.log(`[voice] rejoineVoiceSubtree(${rid}) joining — no non-voice children, staying in place (parent=${r.parentId||'(root)'}, children=${r.childIds.length})`);
+      r._joiningParent = false; r._becomeRootRetries = 0;
+      updateClusterMapSelf(rid);
+      broadcastClusterMap(rid);
+      return;
     }
+    // Truly isolated (no parent, no children) — run a fresh join
     r._joiningParent = false; r._becomeRootRetries = 0;
     updateClusterMapSelf(rid);
     broadcastClusterMap(rid);
@@ -970,6 +976,20 @@ export function handleBecomeMyChild(data, conn) {
   }
 
   console.log(`[voice] handleBecomeMyChild(${rid}) — ${data.requesterId} (${data.name||'?'}) will become our new parent`);
+
+  // The requester may currently be one of our children (e.g. a voice relay child
+  // that is now transitioning to become our non-voice parent after we leave voice).
+  // Remove them from childIds/childConns NOW — before we send the adopt_request —
+  // so we never hold them as both child and parent simultaneously.
+  if (r.childIds.includes(data.requesterId)) {
+    console.log(`[voice] handleBecomeMyChild(${rid}) — evicting ${data.requesterId} from childIds before role-swap`);
+    r.childIds = r.childIds.filter(id => id !== data.requesterId);
+    delete r.childConns[data.requesterId];
+    import('./mesh.js').then(mesh => {
+      mesh.updateClusterMapSelf(rid);
+      mesh.broadcastClusterMap(rid);
+    });
+  }
 
   // Connect to the requester and send them an adopt_request so they accept us
   // as their child.  We include fromBecomeMyChild:true so the receiver's
