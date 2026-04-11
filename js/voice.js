@@ -388,7 +388,7 @@ function broadcastVoiceIntent(rid) {
  *
  * Returns: { allow: bool, redirectTo: peerId|null, reason: string }
  */
-export function checkVoiceAdoptAffinity(rid, requesterVoiceChannelId, conn) {
+export function checkVoiceAdoptAffinity(rid, requesterVoiceChannelId, conn, data = {}) {
   const r = state.rooms[rid]; if (!r) return { allow: true, redirectTo: null, reason: 'no room' };
 
   // If this node was promoted as a relay and the requester is the expected
@@ -398,6 +398,16 @@ export function checkVoiceAdoptAffinity(rid, requesterVoiceChannelId, conn) {
     r._pendingVoiceAdopters.delete(conn.peer);
     console.log(`[voice] checkVoiceAdoptAffinity — accepting pending voice adopter ${conn.peer} (relay handshake)`);
     return { allow: true, redirectTo: null, reason: 'pending voice adopter' };
+  }
+
+  // The fromBecomeMyChild flag means this adopt_request was sent by a voice
+  // root in response to our become_my_child message.  Accept unconditionally —
+  // redirecting would create the Zen→Brave→Zen infinite loop.
+  if (data?.fromBecomeMyChild) {
+    // Also register them so any duplicate arrive also passes cleanly
+    if (!r._pendingVoiceAdopters) r._pendingVoiceAdopters = new Set();
+    console.log(`[voice] checkVoiceAdoptAffinity — accepting fromBecomeMyChild adopter ${conn.peer}`);
+    return { allow: true, redirectTo: null, reason: 'fromBecomeMyChild' };
   }
 
   const myVcId  = r.myVoiceChannelId || null;
@@ -962,15 +972,17 @@ export function handleBecomeMyChild(data, conn) {
   console.log(`[voice] handleBecomeMyChild(${rid}) — ${data.requesterId} (${data.name||'?'}) will become our new parent`);
 
   // Connect to the requester and send them an adopt_request so they accept us
-  // as their child. Their handleAdoptRequest will treat us normally (no voice
-  // affinity restriction because they are non-voice).
+  // as their child.  We include fromBecomeMyChild:true so the receiver's
+  // checkVoiceAdoptAffinity can pre-authorize us even if it hasn't yet
+  // processed our voice_relay_promote message (race-condition guard).
   state.cb.connectTo?.(data.requesterId, c => {
     c.send({
-      type:           'adopt_request',
-      roomId:         rid,
-      id:             state.myId,
-      name:           state.myName,
-      voiceChannelId: r.myVoiceChannelId || null,
+      type:              'adopt_request',
+      roomId:            rid,
+      id:                state.myId,
+      name:              state.myName,
+      voiceChannelId:    r.myVoiceChannelId || null,
+      fromBecomeMyChild: true,   // tells receiver to bypass voice-affinity redirect
     });
   }, () => {
     console.warn(`[voice] handleBecomeMyChild(${rid}) — could not connect back to ${data.requesterId}`);

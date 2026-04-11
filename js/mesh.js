@@ -102,6 +102,12 @@ export function findAndJoinParent(rid, { force = false, excludeIds = [] } = {}) 
   if (!r.myVoiceChannelId && mapEntries.length > 0) {
     const allVoice = mapEntries.every(([, e]) => !!e.voiceChannelId);
     if (allVoice) {
+      if (r._becomeMyChildInFlight) {
+        console.log(`[mesh] findAndJoinParent(${rid}) — become_my_child already in flight, skipping`);
+        return;
+      }
+      r._becomeMyChildInFlight = true;
+      setTimeout(() => { const rr = state.rooms[rid]; if (rr) rr._becomeMyChildInFlight = false; }, 10000);
       console.log(`[mesh] findAndJoinParent(${rid}) — all peers are voice nodes, sending become_my_child to root`);
       _becomeMyChildRequest(rid, r, mapEntries);
       return;
@@ -355,7 +361,7 @@ export function handleAdoptRequest(data, conn) {
   // Voice affinity check — voice nodes only accept same-channel children
   const requesterVcId = data.voiceChannelId || null;
   import('./voice.js').then(voice => {
-    const affinity = voice.checkVoiceAdoptAffinity(rid, requesterVcId, conn);
+    const affinity = voice.checkVoiceAdoptAffinity(rid, requesterVcId, conn, data);
     if (!affinity.allow) {
       console.log(`[mesh] handleAdoptRequest(${rid}) — voice affinity mismatch (${affinity.reason}), redirecting to ${affinity.redirectTo || '(none)'}`);
       conn.send({ type: 'adopt_redirect', roomId: rid, targetId: affinity.redirectTo });
@@ -417,6 +423,7 @@ export function handleAdoptAck(data, conn) {
   console.log(`[mesh] handleAdoptAck(${rid}) — joined cluster, parent=${data.parentId}, dist=${data.distanceFromRoot}`);
   r._joiningParent = false;
   r._becomeRootRetries = 0;
+  r._becomeMyChildInFlight = false;
   r.parentId         = data.parentId;
   r.parentConn       = conn;
   r.grandparentId    = data.grandparentId ?? null;
@@ -470,6 +477,15 @@ export function handleAdoptRedirect(data) {
       const mapEntries = Object.entries(r.clusterMap).filter(([p]) => p !== state.myId);
       const allVoice   = mapEntries.length > 0 && mapEntries.every(([, e]) => !!e.voiceChannelId);
       if (allVoice) {
+        // Guard: don't flood voice peers with repeated become_my_child messages
+        // while the previous one is still in flight (causes the infinite-loop seen
+        // when the adopt_request races with voice_relay_promote).
+        if (r._becomeMyChildInFlight) {
+          console.log(`[mesh] handleAdoptRedirect(${rid}) — become_my_child already in flight, skipping`);
+          return;
+        }
+        r._becomeMyChildInFlight = true;
+        setTimeout(() => { const rr = state.rooms[rid]; if (rr) rr._becomeMyChildInFlight = false; }, 10000);
         console.log(`[mesh] handleAdoptRedirect(${rid}) — all peers are voice nodes, switching to become_my_child`);
         _becomeMyChildRequest(rid, r, mapEntries);
         return;
