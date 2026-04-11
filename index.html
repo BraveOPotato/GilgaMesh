@@ -217,10 +217,12 @@ html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 .cand-name  { flex:1; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; min-width:0; }
 .cand-score { font-family:var(--mono); color:var(--text-muted); font-size:10px; flex-shrink:0; }
 #connect-pane { padding:10px; border-top:1px solid var(--border); flex-shrink:0; }
-#connect-pane input { width:100%; background:var(--bg-raised); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 9px; color:var(--text-primary); font-size:12px; font-family:var(--mono); outline:none; }
+#connect-pane-inputs { display:flex; gap:6px; }
+#connect-pane input { flex:1; min-width:0; background:var(--bg-raised); border:1px solid var(--border); border-radius:var(--radius-sm); width: 100%; margin-bottom: 10px; padding:6px 9px; color:var(--text-primary); font-size:12px; outline:none; }
+#connect-room-id { font-family:var(--mono); }
 #connect-pane input:focus { border-color:var(--border-accent); }
 #connect-pane input::placeholder { color:var(--text-muted); }
-#connect-pane button { width:100%; margin-top:10px; padding:6px; background:var(--bg-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text-secondary); font-size:12px; font-family:var(--font); cursor:pointer; }
+#connect-pane button { width:100%; padding:6px; background:var(--bg-hover); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text-secondary); font-size:12px; font-family:var(--font); cursor:pointer; }
 #connect-pane button:hover { border-color:var(--border-accent); color:var(--text-primary); }
 
 /* ── MODALS ── */
@@ -304,13 +306,13 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
 .call-tiles-grid { flex:1; display:flex; flex-wrap:wrap; gap:16px; padding:24px; align-content:center; justify-content:center; overflow-y:auto; min-height:0; }
 .call-tile { display:flex; flex-direction:column; align-items:center; gap:8px; padding:20px; background:var(--bg-raised); border:2px solid var(--border); border-radius:var(--radius-lg); min-width:120px; max-width:180px; flex:1; transition:border-color .15s,background .15s,flex .2s,max-width .2s,opacity .2s; cursor:pointer; position:relative; }
 .call-tile.call-tile-speaking { border-color:var(--green); background:rgba(61,220,132,0.05); }
-/* Expanded layout: full-width expanded tile on top, dimmed tiles in a row below */
-.call-tiles-grid.has-expanded { flex-direction:column; align-content:flex-start; }
-.call-tiles-grid.has-expanded .call-tile.call-tile-expanded { flex:1; width:100%; max-width:100%; min-width:0; padding:12px; }
-.call-tiles-grid.has-expanded .call-tile.call-tile-dimmed { flex:0 0 auto; width:100px; min-width:80px; max-width:120px; opacity:.5; padding:10px; font-size:11px; }
-/* Row of dimmed tiles sits beneath the expanded tile */
-.call-tiles-grid.has-expanded { flex-direction:column; }
-.call-tiles-grid.has-expanded::after { content:''; display:block; } /* ensure column flow */
+/* Expanded layout: full-width expanded tile fills space, dimmed peers in a row below */
+.call-tiles-grid.has-expanded { flex-direction:column; align-items:stretch; align-content:flex-start; justify-content:flex-start; }
+.call-tiles-grid.has-expanded .call-tile.call-tile-expanded { flex:1; width:100%; max-width:100%; min-width:0; padding:12px; min-height:0; }
+.call-tiles-grid.has-expanded .call-tile.call-tile-dimmed { flex:0 0 auto; width:110px; min-width:90px; max-width:130px; opacity:.6; padding:10px; font-size:11px; align-self:auto; }
+/* Inject a flex-row wrapper for the dimmed tiles via JS — they live in .call-tiles-dimmed-row */
+.call-tiles-dimmed-row { display:none; }
+.call-tiles-grid.has-expanded .call-tiles-dimmed-row { display:flex; flex-direction:row; flex-wrap:wrap; gap:10px; flex-shrink:0; padding-top:4px; }
 .call-tile-video-wrap { position:relative; width:100%; display:flex; align-items:center; justify-content:center; border-radius:var(--radius); overflow:hidden; }
 /* contain preserves aspect ratio — nothing gets cropped */
 .call-tile-video { width:100%; max-height:200px; border-radius:var(--radius); object-fit:contain; background:#000; display:block; }
@@ -358,6 +360,7 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
 /* ── REPLY PREVIEW IN MESSAGE ── */
 .msg-reply-preview { display:flex; align-items:baseline; gap:6px; background:var(--bg-raised); border-left:3px solid var(--accent); border-radius:0 var(--radius-sm) var(--radius-sm) 0; padding:3px 8px; margin-bottom:4px; cursor:pointer; opacity:.75; transition:opacity .15s; max-width:100%; overflow:hidden; }
 .msg-reply-preview:hover { opacity:1; background:var(--bg-hover); }
+.msg-reply-preview-header { margin-bottom:2px; border-radius:var(--radius-sm); border-left:3px solid var(--accent); padding:4px 10px; }
 .msg-reply-author { font-size:11px; font-weight:600; color:var(--accent); white-space:nowrap; flex-shrink:0; }
 .msg-reply-content { font-size:11px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
@@ -366,7 +369,7 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
 .msg-highlight { animation:msg-highlight-flash 1.8s ease; border-radius:var(--radius-sm); }
 
 /* ── CONNECT PANE ROOM NAME ── */
-#connect-pane input + input { margin-top:4px; }
+        
 
 /* ── MISC ── */
 .hidden { display:none !important; }
@@ -521,8 +524,10 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
     <div class="candidates-list" id="candidates-list"></div>
     <div id="connect-pane">
       <input type="text" id="connect-peer-id" placeholder="Peer ID…">
-      <input type="text" id="connect-room-id" placeholder="Room ID (optional)…" style="font-family:var(--mono)">
-      <input type="text" id="connect-room-name" placeholder="Room name (optional)…">
+      <div id="connect-pane-inputs">
+        <input type="text" id="connect-room-name" placeholder="Room name…">
+        <input type="text" id="connect-room-id" placeholder="Room ID…">
+      </div>
       <button onclick="manualConnect()">Connect</button>
     </div>
   </div>

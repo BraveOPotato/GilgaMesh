@@ -386,8 +386,19 @@ export function renderMessage(msg, doScroll = true) {
     group.className = 'msg-group' + (isPending ? ' msg-pending' : '');
     group.dataset.authorId = msg.authorId;
     group.dataset.ts       = msg.ts;
+
+    // Reply preview sits above the author header when starting a new group
+    if (msg.replyTo) {
+      const rp = document.createElement('div');
+      rp.className = 'msg-reply-preview msg-reply-preview-header';
+      rp.innerHTML = `<span class=\"msg-reply-author\">${escapeHtml(msg.replyTo.author)}</span><span class=\"msg-reply-content\">${escapeHtml((msg.replyTo.content || '').slice(0, 100))}</span>`;
+      rp.title = 'Jump to original message';
+      rp.onclick = () => window._gmScrollToMsg(msg.replyTo.id);
+      group.appendChild(rp);
+    }
+
     const hdr = document.createElement('div'); hdr.className = 'msg-header';
-    hdr.innerHTML = `<span class="msg-author" style="color:${color}">${escapeHtml(msg.author || '?')}</span>${isRoot_ ? '<span class="msg-role-badge">root</span>' : ''}<span class="msg-time">${timeStr}</span>${isPending ? '<span class="msg-pending-badge">⏳</span>' : ''}`;
+    hdr.innerHTML = `<span class=\"msg-author\" style=\"color:${color}\">${escapeHtml(msg.author || '?')}</span>${isRoot_ ? '<span class=\"msg-role-badge\">root</span>' : ''}<span class=\"msg-time\">${timeStr}</span>${isPending ? '<span class=\"msg-pending-badge\">⏳</span>' : ''}`;
     group.appendChild(hdr);
   }
 
@@ -423,16 +434,6 @@ export function renderMessage(msg, doScroll = true) {
       }, 1000);
     }
   } else {
-    // Reply preview (if this message is a reply)
-    if (msg.replyTo) {
-      const rp = document.createElement('div');
-      rp.className = 'msg-reply-preview';
-      rp.innerHTML = `<span class="msg-reply-author">${escapeHtml(msg.replyTo.author)}</span><span class="msg-reply-content">${escapeHtml((msg.replyTo.content || '').slice(0, 100))}</span>`;
-      rp.title = 'Jump to original message';
-      rp.onclick = () => window._gmScrollToMsg(msg.replyTo.id);
-      body.appendChild(rp);
-    }
-
     const span = document.createElement('span'); span.className = 'msg-text';
     span.innerHTML = renderMarkdown(msg.content || '');
 
@@ -734,10 +735,20 @@ function _refreshCallView(rid, vcId) {
         const grid2 = document.getElementById('call-tiles-grid');
         if (grid2) {
           grid2.classList.add('has-expanded');
-          grid2.querySelectorAll('.call-tile').forEach(t => {
+          const tiles2 = Array.from(grid2.querySelectorAll('.call-tile'));
+          tiles2.forEach(t => {
             const isTarget = t.id === `calltile-${_expandedTileId}`;
             t.classList.toggle('call-tile-expanded', isTarget);
             t.classList.toggle('call-tile-dimmed', !isTarget);
+          });
+          let dimmedRow2 = grid2.querySelector('.call-tiles-dimmed-row');
+          if (!dimmedRow2) {
+            dimmedRow2 = document.createElement('div');
+            dimmedRow2.className = 'call-tiles-dimmed-row';
+            grid2.appendChild(dimmedRow2);
+          }
+          tiles2.forEach(t => {
+            if (t.classList.contains('call-tile-dimmed')) dimmedRow2.appendChild(t);
           });
         }
       }
@@ -865,19 +876,38 @@ export function fullscreenTile(peerId) {
 export function expandCallTile(peerId) {
   const grid = document.getElementById('call-tiles-grid'); if (!grid) return;
   if (_expandedTileId === peerId) {
-    // Collapse
+    // Collapse — move dimmed tiles back to the main grid
     _expandedTileId = null;
     grid.classList.remove('has-expanded');
+    const dimmedRow = grid.querySelector('.call-tiles-dimmed-row');
+    if (dimmedRow) {
+      while (dimmedRow.firstChild) grid.appendChild(dimmedRow.firstChild);
+      dimmedRow.remove();
+    }
     grid.querySelectorAll('.call-tile').forEach(t => {
       t.classList.remove('call-tile-expanded', 'call-tile-dimmed');
     });
   } else {
     _expandedTileId = peerId;
     grid.classList.add('has-expanded');
-    grid.querySelectorAll('.call-tile').forEach(t => {
+
+    // Separate expanded tile from the rest
+    const tiles = Array.from(grid.querySelectorAll('.call-tile'));
+    tiles.forEach(t => {
       const isTarget = t.id === `calltile-${peerId}`;
       t.classList.toggle('call-tile-expanded', isTarget);
       t.classList.toggle('call-tile-dimmed', !isTarget);
+    });
+
+    // Create or reuse a dimmed row container and append it after the expanded tile
+    let dimmedRow = grid.querySelector('.call-tiles-dimmed-row');
+    if (!dimmedRow) {
+      dimmedRow = document.createElement('div');
+      dimmedRow.className = 'call-tiles-dimmed-row';
+      grid.appendChild(dimmedRow);
+    }
+    tiles.forEach(t => {
+      if (t.classList.contains('call-tile-dimmed')) dimmedRow.appendChild(t);
     });
   }
 }
