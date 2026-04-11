@@ -171,13 +171,24 @@ function _becomeMyChildRequest(rid, r, mapEntries) {
     });
   }
 
-  // Safety valve: if no root responds within 8s, clear pre-authorizations and
-  // become root ourselves (cluster may have fully disconnected).
+  // Safety valve: after 8s clear _joiningParent regardless of outcome.
+  // If we were successfully made root (childIds.length > 0), the flag must
+  // still be cleared — it was never cleared on the success path because we
+  // receive adopt_request packets (becoming someone's parent), not adopt_ack.
+  // Leaving it true permanently blocks future findAndJoinParent calls.
   setTimeout(() => {
     const rr = state.rooms[rid];
-    if (!rr || rr.parentId || rr.childIds.length) return; // already placed
-    console.warn(`[mesh] _becomeMyChildRequest(${rid}) — no root responded, becoming root`);
+    if (!rr) return;
+    // Always clean up pre-authorizations and the in-flight flag
     for (const [pid] of mapEntries) rr._pendingVoiceAdopters?.delete(pid);
+    rr._becomeMyChildInFlight = false;
+    if (rr.parentId || rr.childIds.length) {
+      // Already placed (success) — just clear the flag
+      rr._joiningParent = false;
+      return;
+    }
+    // No root responded — become root ourselves
+    console.warn(`[mesh] _becomeMyChildRequest(${rid}) — no root responded, becoming root`);
     rr._joiningParent = false;
     becomeRoot(rid);
   }, 8000);
@@ -357,10 +368,20 @@ export function handleAdoptRequest(data, conn) {
     return;
   }
 
+  // Guard against duplicate adopt_requests from the same peer racing the async
+  // voice-affinity check (e.g. retry arrives before first import() resolves).
+  if (!r._adoptInFlight) r._adoptInFlight = new Set();
+  if (r._adoptInFlight.has(pid)) {
+    console.log(`[mesh] handleAdoptRequest(${rid}) — adopt already in flight for ${pid}, ignoring duplicate`);
+    return;
+  }
+  r._adoptInFlight.add(pid);
+
   console.log(`[mesh] handleAdoptRequest(${rid}) — accepting ${pid} as child (now ${r.childIds.length + 1} children)`);
   // Voice affinity check — voice nodes only accept same-channel children
   const requesterVcId = data.voiceChannelId || null;
   import('./voice.js').then(voice => {
+    r._adoptInFlight.delete(pid);
     const affinity = voice.checkVoiceAdoptAffinity(rid, requesterVcId, conn, data);
     if (!affinity.allow) {
       console.log(`[mesh] handleAdoptRequest(${rid}) — voice affinity mismatch (${affinity.reason}), redirecting to ${affinity.redirectTo || '(none)'}`);
@@ -392,6 +413,14 @@ function _doAddChild(rid, pid, conn, data) {
   }
 
   addChild(rid, pid, conn);
+  // If we became root via _becomeMyChildRequest, _joiningParent was never
+  // cleared on the success path (we receive adopt_request, not adopt_ack).
+  // Clear it now on the first successful child adoption so future
+  // findAndJoinParent calls are not blocked by the stale flag.
+  if (r._joiningParent && r._becomeMyChildInFlight) {
+    r._joiningParent = false;
+    r._becomeMyChildInFlight = false;
+  }
   updateClusterMapSelf(rid); // must happen before adopt_ack so child gets accurate childCount
   conn.send({
     type:             'adopt_ack',
@@ -899,7 +928,7 @@ export function handleTopologyRequest(data, conn) {
 }
 
 // ─── CHILD LOST ───────────────────────────────────────────────────────────────
-function onChildLost(rid, pid) {
+export function onChildLost(rid, pid) {
   const r = state.rooms[rid]; if (!r) return;
   r.childIds = r.childIds.filter(id => id !== pid);
   delete r.childConns[pid];
