@@ -28,14 +28,51 @@ export function createRoom() {
 export function joinRoomViaInvite(rid, roomName, viaPeerId) {
   if (state.rooms[rid]) { switchRoom(rid); toast(`Already in "${state.rooms[rid].name}"`, 'info'); return; }
 
-  // Create the room shell so the rest of the UI works, but don't treat ourselves
-  // as placed yet — _joiningParent stays false until we have a real cluster map.
-  state.rooms[rid] = makeRoomShell(rid, roomName || `Room ${rid}`, null);
-  saveStorage(); renderRoomList();
-  switchRoom(rid);
-  toast(`Joining room "${state.rooms[rid].name}"…`, 'info');
+  // Show a non-blocking "joining…" toast but do NOT create the room shell or
+  // switch the UI yet — we wait until the scout succeeds so a failed join
+  // never leaves a phantom empty room in the sidebar.
+  const resolvedName = roomName || `Room ${rid}`;
+  toast(`Joining room "${resolvedName}"…`, 'info');
 
   console.log(`[rooms] joinRoomViaInvite(${rid}) — scouting cluster map via ${viaPeerId}`);
+
+  // Helper: commit the room into state and switch the UI to it.
+  // Called exactly once on the success path.
+  const commitRoom = (map) => {
+    // Guard: if another code path already added this room while we were
+    // scouting (e.g. duplicate invite click), just switch to it.
+    if (state.rooms[rid]) { switchRoom(rid); return; }
+
+    state.rooms[rid] = makeRoomShell(rid, resolvedName, null);
+
+    if (map !== null) {
+      // Merge the received cluster map into our room shell
+      const r = state.rooms[rid];
+      for (const [pid, entry] of Object.entries(map)) {
+        if (pid === state.myId) continue;
+        r.clusterMap[pid] = entry;
+        if (!r.peers[pid]) r.peers[pid] = { id: pid, name: entry.name || pid };
+      }
+      // Ensure the inviting peer is present in the map
+      if (!r.clusterMap[viaPeerId]) {
+        r.clusterMap[viaPeerId] = { name: viaPeerId, distance: 0, childCount: 0, connCount: 0, descendantCount: 1 };
+      }
+      updateClusterMapSelf(rid);
+    }
+
+    saveStorage();
+    renderRoomList();
+    switchRoom(rid);
+
+    if (map !== null) {
+      console.log(`[rooms] joinRoomViaInvite(${rid}) — clusterMap ready, finding optimal parent`);
+      findAndJoinParent(rid);
+    } else {
+      // map === null: reusing an existing connection — map + findAndJoinParent
+      // will be triggered automatically via the normal dispatch path.
+      console.log(`[rooms] joinRoomViaInvite(${rid}) — map arriving via existing conn`);
+    }
+  };
 
   import('./peer.js').then(({ scoutClusterMap }) => {
     const MAX_ATTEMPTS = 6;        // 1 initial + 5 retries
@@ -47,41 +84,22 @@ export function joinRoomViaInvite(rid, roomName, viaPeerId) {
       console.log(`[rooms] joinRoomViaInvite(${rid}) — scout attempt ${attempt}/${MAX_ATTEMPTS} via ${viaPeerId}`);
 
       scoutClusterMap(viaPeerId, rid, (map) => {
-        const r = state.rooms[rid];
-        if (!r) return; // room was deleted while we were connecting
-
-        if (map === null) {
-          // Reusing existing connection — map will arrive via normal dispatch,
-          // which triggers findAndJoinParent automatically.
-          console.log(`[rooms] joinRoomViaInvite(${rid}) — map arriving via existing conn`);
-          return;
-        }
-
-        // Merge the received map into our clusterMap
-        console.log(`[rooms] joinRoomViaInvite(${rid}) — received map with ${Object.keys(map).length} entries on attempt ${attempt}`);
-        for (const [pid, entry] of Object.entries(map)) {
-          if (pid === state.myId) continue;
-          r.clusterMap[pid] = entry;
-          if (!r.peers[pid]) r.peers[pid] = { id: pid, name: entry.name || pid };
-        }
-        // Ensure the inviting peer is in the map even if it omitted its own entry
-        if (!r.clusterMap[viaPeerId]) {
-          r.clusterMap[viaPeerId] = { name: viaPeerId, distance: 0, childCount: 0, connCount: 0, descendantCount: 1 };
-        }
-        updateClusterMapSelf(rid);
-
-        console.log(`[rooms] joinRoomViaInvite(${rid}) — clusterMap ready, finding optimal parent`);
-        findAndJoinParent(rid);
+        // ── Success ──────────────────────────────────────────────────────────
+        console.log(`[rooms] joinRoomViaInvite(${rid}) — scout succeeded on attempt ${attempt}` +
+          (map ? ` (${Object.keys(map).length} map entries)` : ' (existing conn)'));
+        commitRoom(map);
       }, (reason) => {
+        // ── Failure / retry ───────────────────────────────────────────────────
         console.log(`[rooms] joinRoomViaInvite(${rid}) — scout attempt ${attempt} failed: ${reason}`);
 
-        if (attempt < MAX_ATTEMPTS && state.rooms[rid]) {
+        if (attempt < MAX_ATTEMPTS) {
           console.log(`[rooms] joinRoomViaInvite(${rid}) — retrying in ${RETRY_INTERVAL_MS}ms`);
           setTimeout(tryScout, RETRY_INTERVAL_MS);
         } else {
+          // All attempts exhausted — never created a room shell, so nothing to
+          // clean up. Just inform the user and stay on the rooms grid.
           console.log(`[rooms] joinRoomViaInvite(${rid}) — all ${MAX_ATTEMPTS} attempts failed, giving up`);
-          toast('Could not reach invite peer', 'error');
-          delete state.rooms[rid]; renderRoomList();
+          toast(`Could not join "${resolvedName}" — the inviter may be offline.`, 'error');
         }
       });
     };

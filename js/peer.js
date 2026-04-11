@@ -257,7 +257,6 @@ function renderTopology() {
 // adopt_request on the real join connection.
 export function scoutClusterMap(targetId, rid, onMap, onFail) {
   if (!targetId || targetId === state.myId) { onFail?.('invalid target'); return; }
-  const r = state.rooms[rid]; if (!r) { onFail?.('no room'); return; }
 
   console.log(`[peer] scoutClusterMap(${rid}) — connecting to ${targetId} for map`);
 
