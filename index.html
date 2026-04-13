@@ -84,7 +84,7 @@ html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 #leave-room-btn { width:100%; background:none; border:1px solid var(--border); cursor:pointer; color:var(--text-muted); font-size:12px; font-family:var(--font); padding:5px 10px; border-radius:var(--radius-sm); text-align:left; line-height:1.4; display:flex; align-items:center; gap:6px; }
 #leave-room-btn:hover { color:var(--red); border-color:rgba(255,77,106,.35); background:var(--red-dim); }
 
-#channels-section { flex:1; overflow-y:auto; padding:6px 0; }
+#channels-section { flex:1; overflow-y:auto; padding:6px 0; position:relative; }
 .section-label { padding:9px 13px 4px; font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); display:flex; align-items:center; justify-content:space-between; }
 .section-label button { background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:14px; line-height:1; padding:1px 3px; border-radius:4px; }
 .section-label button:hover { color:var(--text-primary); background:var(--bg-hover); }
@@ -399,6 +399,10 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
   .call-controls { flex-wrap:wrap; gap:6px; padding:10px; }
   .call-ctrl-btn { padding:7px 10px; font-size:12px; flex:1 1 auto; min-width:0; justify-content:center; }
 }
+
+/* ── PEER PROFILE POPUP ── */
+.pp-action-btn { display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-raised);cursor:pointer;font-size:13px;font-weight:500;font-family:var(--font);color:var(--text-primary);width:100%;text-align:left;transition:all .12s; }
+.pp-action-btn:hover { border-color:var(--border-accent);background:var(--bg-hover); }
 </style>
 </head>
 <body>
@@ -408,7 +412,10 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
 
   <!-- ═══ ROOM RAIL ═══ -->
   <div id="room-rail">
-    <img id="rail-logo" src="img/logo.svg" alt="GilgaMesh" title="GilgaMesh">
+    <div id="rail-logo-wrap" onclick="window._gmOpenFriends()" title="Friends &amp; Direct Messages" style="position:relative;cursor:pointer;width:36px;height:36px;margin:4px 0 2px;flex-shrink:0">
+      <img id="rail-logo" src="img/logo.svg" alt="GilgaMesh" style="width:36px;height:36px;opacity:0.85;display:block">
+      <span id="friends-rail-badge" class="room-badge" style="display:none;position:absolute;top:-4px;right:-4px"></span>
+    </div>
     <div class="rail-divider"></div>
     <div id="rooms-list"></div>
     <div class="rail-divider"></div>
@@ -432,6 +439,8 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
     <span id="status-text" style="display:none"></span>
 
     <div id="channels-section">
+      <!-- Friends sidebar overlay — shown instead of room content when in friends view -->
+      <div id="friends-sidebar-overlay" class="hidden" style="position:absolute;inset:0;background:var(--bg-deep);overflow-y:auto;z-index:1;padding:6px 0"></div>
       <div class="section-label">Channels <button onclick="showAddChannel()" title="New channel">+</button></div>
       <div id="channels-list"></div>
       <div class="divider"></div>
@@ -553,9 +562,12 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
     <p>Manage your identity.</p>
     <div class="form-group"><label class="form-label">Display Name</label><input type="text" class="form-input" id="settings-name" maxlength="32"></div>
     <div class="form-group"><label class="form-label">Your Peer ID</label><input type="text" class="form-input" id="settings-peer-id" readonly style="font-family:var(--mono);font-size:12px"></div>
-    <div class="btn-row">
-      <button class="btn btn-secondary" onclick="closeModal('settings-modal')">Cancel</button>
-      <button class="btn btn-primary"   onclick="saveSettings()">Save</button>
+    <div class="btn-row" style="justify-content:space-between;align-items:center">
+      <button class="btn" style="background:var(--red-dim);color:var(--red);border:1px solid rgba(255,77,106,.3);padding:8px 14px;font-size:12px" onclick="clearData()">🗑 Clear All Data</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary" onclick="closeModal('settings-modal')">Cancel</button>
+        <button class="btn btn-primary"   onclick="saveSettings()">Save</button>
+      </div>
     </div>
   </div>
 </div>

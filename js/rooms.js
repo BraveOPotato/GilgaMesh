@@ -1,7 +1,7 @@
 import { state } from './state.js';
 import { makeRoomShell, saveStorage } from './storage.js';
 import { generateRoomId } from './ids.js';
-import { becomeRoot, savePeerToRoom, updateClusterMapSelf, broadcastClusterMap, handleAdoptRequest, findAndJoinParent, onChildLost } from './mesh.js';
+import { becomeRoot, savePeerToRoom, updateClusterMapSelf, broadcastClusterMap, handleAdoptRequest, findAndJoinParent } from './mesh.js';
 import { startLocalElection, stopLocalElection } from './election.js';
 import { displayMessage, addSystemMsg } from './messaging.js';
 import { toast, renderRoomList, renderRoomSidebar, renderRoomGrid, renderAllMessages,
@@ -190,6 +190,11 @@ export function switchChannel(id) {
 
 // ─── ROOM SWITCHING ───────────────────────────────────────────────────────────
 export function switchRoom(rid) {
+  state.activeFriendsView = false;
+  state.activeDMPeer      = null;
+  // Hide friends overlay so the real sidebar content is visible again
+  const ov = document.getElementById('friends-sidebar-overlay');
+  if (ov) ov.classList.add('hidden');
   state.activeRoomId = rid; state.activeChannel = 'general';
   const r = state.rooms[rid]; if (!r) return;
   for (const ch of r.channels) r.unread[ch.id] = 0;
@@ -218,7 +223,11 @@ export function switchRoom(rid) {
 }
 
 export function backToRooms() {
-  state.activeRoomId = null;
+  state.activeRoomId      = null;
+  state.activeFriendsView = false;
+  state.activeDMPeer      = null;
+  const ov = document.getElementById('friends-sidebar-overlay');
+  if (ov) ov.classList.add('hidden');
   document.getElementById('active-room-name').textContent  = 'GilgaMesh';
   document.getElementById('active-room-id').textContent    = '';
   document.getElementById('active-channel-title').textContent = 'Rooms';
@@ -286,15 +295,6 @@ export function handlePeerLeaving(data) {
   // keeps the member visible in the sidebar with an offline dot.
   const r = state.rooms[data.roomId]; if (!r) return;
   const name = r.peers[data.id]?.name || data.id;
-
-  // If the leaving peer is one of our children, clean up the child slot now.
-  // Without this, the peer stays in childIds even after it has gracefully
-  // detached (e.g. a voice node leaving the channel sends peer_leaving before
-  // reconnecting elsewhere, and the old parent must release it immediately).
-  if (r.childIds.includes(data.id)) {
-    onChildLost(data.roomId, data.id);
-  }
-
   addSystemMsg(data.roomId, 'general', `${name} left`);
   saveStorage();
   if (data.roomId === state.activeRoomId) renderRoomSidebar();

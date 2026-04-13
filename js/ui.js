@@ -177,6 +177,12 @@ export function toast(msg, type = 'info') {
 
 // ─── ROOM LISTS ───────────────────────────────────────────────────────────────
 export function renderRoomList() {
+  // Highlight the logo/friends button when in friends view
+  const logoWrap = document.getElementById('rail-logo-wrap');
+  if (logoWrap) {
+    logoWrap.style.opacity  = state.activeFriendsView ? '1' : '0.85';
+    logoWrap.style.filter   = state.activeFriendsView ? 'drop-shadow(0 0 6px var(--accent))' : '';
+  }
   const list = document.getElementById('rooms-list');
   const rids = Object.keys(state.rooms);
   if (!rids.length) {
@@ -330,7 +336,8 @@ export function renderRoomSidebar() {
     const color     = stringToColor(p.id);
     const role      = isParent ? 'parent' : isChild ? 'child' : '';
     const dotClass  = checking ? 'searching' : isParent ? 'server' : alive ? 'online' : 'offline';
-    return `<div class="peer-item${alive || checking ? '' : ' peer-offline'}">
+    const safeN = (p.name||p.id).replace(/'/g,"\'");
+    return `<div class="peer-item${alive || checking ? '' : ' peer-offline'}" style="cursor:pointer" onclick="window._gmShowPeerProfile('${p.id}','${safeN}')">
       <div class="peer-avatar" style="background:${color}20;border-color:${color}${alive || checking ? '40' : '20'};color:${color}${alive || checking ? '' : ';opacity:.5'}">
         ${(p.name || 'P').charAt(0).toUpperCase()}
         <div class="peer-status-dot ${dotClass}"></div>
@@ -357,6 +364,13 @@ export function updatePeerCount() {
 // ─── MESSAGES ─────────────────────────────────────────────────────────────────
 export function renderAllMessages() {
   document.getElementById('messages').innerHTML = '';
+  if (state.activeFriendsView) {
+    import('./friends.js').then(fr => {
+      if (state.activeDMPeer) fr.renderDMThreadContent(state.activeDMPeer);
+      else fr.renderFriendsGrid();
+    });
+    return;
+  }
   if (!state.activeRoomId) { renderRoomGrid(); return; }
   const r = state.rooms[state.activeRoomId]; if (!r) return;
   (r.messages[state.activeChannel] || []).forEach(m => renderMessage(m, false));
@@ -369,6 +383,10 @@ export function renderMessage(msg, doScroll = true) {
     const d = document.createElement('div');
     d.className = 'system-msg'; d.textContent = msg.content;
     C.appendChild(d); if (doScroll) scrollToBottom(); return;
+  }
+  if (msg.type === 'friend_request_msg') {
+    import('./friends.js').then(fr => fr.renderFriendRequestMsg(msg));
+    return;
   }
   const r         = state.activeRoomId ? state.rooms[state.activeRoomId] : null;
   const isMe      = msg.authorId === state.myId;
@@ -659,6 +677,94 @@ export function closeCallView() {
   if (typingRow) typingRow.style.display = '';
 }
 
+// ─── DM CALL VIEW (direct peer call, no room) ────────────────────────────────
+export function openDMCallViewUI(peerId, peerName) {
+  const main = document.getElementById('main');
+  document.getElementById('messages').style.display   = 'none';
+  document.getElementById('input-area').style.display = 'none';
+  const typingRow = document.querySelector('#main > div:has(#typing-indicator)');
+  if (typingRow) typingRow.style.display = 'none';
+
+  let cv = document.getElementById('call-view');
+  if (!cv) { cv = document.createElement('div'); cv.id = 'call-view'; main.appendChild(cv); }
+  cv.dataset.dmPeer = peerId;
+
+  const color = stringToColor(peerId);
+  const myColor = stringToColor(state.myId || '');
+  const activeSpeakers = state.dmCallSpeakers || {};
+
+  // Build tiles: me + the peer
+  const tiles = [
+    { id: state.myId, name: state.myName + ' (you)', color: myColor, isSelf: true },
+    { id: peerId,     name: peerName,                color,          isSelf: false },
+  ];
+
+  import('./voice.js').then(v => {
+    const muted    = v.isMuted ? v.isMuted()    : false;
+    const deafened = v.isDeafened ? v.isDeafened() : false;
+
+    const tileHtml = tiles.map(p => {
+      const speaking = !!activeSpeakers[p.id];
+      return `<div class="call-tile${speaking ? ' call-tile-speaking' : ''}" id="calltile-${p.id}">
+        <div class="call-tile-video-wrap" id="calltile-video-${p.id}">
+          <video class="call-tile-video hidden" id="calltile-vid-${p.id}" autoplay playsinline ${p.isSelf ? 'muted' : ''}></video>
+          <button class="call-tile-fullscreen hidden" id="calltile-fs-${p.id}"
+            onclick="event.stopPropagation();window._gmFullscreenTile('${p.id}')" title="Fullscreen">⛶</button>
+          <div class="call-tile-avatar${speaking ? ' vc-speaking-glow' : ''}" id="calltile-avatar-${p.id}"
+               style="background:${p.color}22;border:2px solid ${p.color}${speaking?'':' 44'};color:${p.color}">
+            ${(p.name||'?').charAt(0).toUpperCase()}
+          </div>
+        </div>
+        <div class="call-tile-name">${escapeHtml(p.name)}</div>
+      </div>`;
+    }).join('');
+
+    cv.innerHTML = `
+      <div class="call-view-header">
+        <span class="call-view-icon">📞</span>
+        <span class="call-view-title">${escapeHtml(peerName)}</span>
+        <span class="call-view-count">Direct call</span>
+        <button class="call-view-close icon-btn" onclick="window._gmEndDMCall('${peerId}')" title="End call">✕ End Call</button>
+      </div>
+      <div class="call-tiles-grid" id="call-tiles-grid">${tileHtml}</div>
+      <div class="call-controls">
+        <button class="call-ctrl-btn${muted ? ' active-red' : ''}" id="call-mute-btn"
+          onclick="window._gmDMCallToggleMute('${peerId}')">
+          ${muted ? '🔇 Unmute' : '🎤 Mute'}
+        </button>
+        <button class="call-ctrl-btn${deafened ? ' active-red' : ''}" id="call-deafen-btn"
+          onclick="window._gmDMCallToggleDeafen('${peerId}')">
+          ${deafened ? '🔕 Undeafen' : '🔊 Deafen'}
+        </button>
+        <button class="call-ctrl-btn" id="call-cam-btn"
+          onclick="window._gmDMCallToggleCam('${peerId}')" title="Toggle camera">
+          📷 Camera
+        </button>
+        <button class="call-ctrl-btn" id="call-screen-btn"
+          onclick="window._gmDMCallToggleScreen('${peerId}')" title="Share screen">
+          🖥️ Share
+        </button>
+        <button class="call-ctrl-btn danger" onclick="window._gmEndDMCall('${peerId}')" title="End call">
+          📵 Leave
+        </button>
+      </div>`;
+
+    import('./voice.js').then(vv => vv.reattachActiveStreams?.());
+  });
+}
+
+export function closeDMCallView() {
+  const cv = document.getElementById('call-view');
+  if (cv) cv.remove();
+  document.getElementById('messages').style.display   = '';
+  document.getElementById('input-area').style.display = '';
+  const typingRow = document.querySelector('#main > div:has(#typing-indicator)');
+  if (typingRow) typingRow.style.display = '';
+  // Remove incoming call banner if present
+  const banner = document.getElementById('dm-call-banner');
+  if (banner) banner.remove();
+}
+
 function _refreshCallView(rid, vcId) {
   const cv = document.getElementById('call-view'); if (!cv) return;
   const r  = state.rooms[rid]; if (!r) return;
@@ -922,7 +1028,10 @@ export function updateLatencyDisplay() {
 // ─── TYPING INDICATOR ─────────────────────────────────────────────────────────
 export function updateTypingIndicator() {
   const r   = state.activeRoomId ? state.rooms[state.activeRoomId] : null;
-  const tp  = r ? r.typingPeers : {};
+  // In DM view use dmTypingPeers; in room view use room's typingPeers
+  const tp  = state.activeDMPeer
+    ? (state.dmTypingPeers || {})
+    : (r ? r.typingPeers : {});
   const names = Object.entries(tp)
     .filter(([k, v]) => !k.startsWith('_t_') && typeof v === 'string')
     .map(([, v]) => v);
@@ -1032,7 +1141,7 @@ export function confirmMention() {
   input.setSelectionRange(newPos, newPos);
   input.focus();
   closeMentionPopup();
-  document.getElementById('send-btn').disabled = !input.value.trim() || !state.activeRoomId;
+  document.getElementById('send-btn').disabled = !input.value.trim() || (!state.activeRoomId && !state.activeDMPeer);
 }
 
 export function closeMentionPopup() {

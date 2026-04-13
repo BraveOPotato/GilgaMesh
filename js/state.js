@@ -29,6 +29,16 @@ export const state = {
   // Active reply target: { id, author, content } or null
   replyingTo:   null,
 
+  // Friends & DMs
+  friends:           {},   // peerId → { id, name, addedAt }
+  blocked:           {},   // peerId → { id, name, blockedAt }
+  dms:               {},   // peerId → [ ...messages ]
+  dmUnread:          {},   // peerId → count
+  activeDMPeer:      null, // peerId of open DM thread
+  dmCall:            null, // { peerId, peerName, active, initiator } when in a DM call
+  dmCallSpeakers:    {},   // peerId → true when speaking in DM call
+  activeFriendsView: false,// true when in friends context
+
   // File shares (global, not per-room)
   fileShares:   {},   // token → { file, expires, filename, size, mime }
 

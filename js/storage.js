@@ -116,3 +116,11 @@ export function makeRoomShell(id, name, createdBy) {
   for (const ch of r.channels) { r.messages[ch.id] = []; r.unread[ch.id] = 0; }
   return r;
 }
+
+// ─── CLEAR ALL DATA ───────────────────────────────────────────────────────────
+export function clearAllData() {
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+  keys.forEach(k => localStorage.removeItem(k));
+  location.reload();
+}

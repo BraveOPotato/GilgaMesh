@@ -195,10 +195,12 @@ export function displayMessage(rid, msg) {
   const r = state.rooms[rid]; if (!r || !msg || !msg.channel) return;
   if (!r.messages[msg.channel]) r.messages[msg.channel] = [];
   if (msg.id && r.messages[msg.channel].some(m => m.id === msg.id)) return;
+  // Store always (for routing), but don't render blocked peers' messages
+  const blockedInRoom = msg.authorId && msg.authorId !== 'system' && state.blocked?.[msg.authorId];
   r.messages[msg.channel].push(msg);
 
   if (rid === state.activeRoomId && msg.channel === state.activeChannel) {
-    renderMessage(msg); scrollToBottom();
+    if (!blockedInRoom) { renderMessage(msg); scrollToBottom(); }
   } else {
     r.unread[msg.channel] = (r.unread[msg.channel] || 0) + 1;
     if (rid === state.activeRoomId) renderRoomSidebar();

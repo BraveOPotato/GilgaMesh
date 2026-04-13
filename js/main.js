@@ -3,7 +3,7 @@
  */
 
 import { state } from './state.js';
-import { loadStorage, saveStorage, makeRoomShell } from './storage.js';
+import { loadStorage, saveStorage, makeRoomShell, clearAllData } from './storage.js';
 import { generateRoomId } from './ids.js';
 import { startPeer, handlePong, sendHandshake, connectTo } from './peer.js';
 import {
@@ -18,11 +18,23 @@ import {
 } from './mesh.js';
 import { handleElectionStart, handleElectionVote, handleElectionWon, startLocalElection } from './election.js';
 import { handleIncomingMessage, handleMsgAck, addSystemMsg, displayMessage, flushPendingMessages, onTyping, handleTyping } from './messaging.js';
-import { handleVoiceChannelCreated, handleVoiceData, handleVoiceBinary, handleBecomeMyChild, handleVoiceEvictChildren, handleVoiceRelayPromote, handleVideoSignal } from './voice.js';
+import { handleVoiceChannelCreated, handleVoiceData, handleVoiceBinary, handleBecomeMyChild, handleVoiceEvictChildren, handleVoiceRelayPromote, handleVideoSignal, handleDMVoiceData } from './voice.js';
 import { handleChannelCreated, switchChannel, createRoom, createChannel, joinRoomViaInvite,
          confirmLeaveRoom, leaveRoom, showInvite, copyInviteLink, checkJoinUrl,
          backToRooms, switchRoom, handlePeerLeaving } from './rooms.js';
 import { triggerFileShare, downloadFile, checkShareUrl } from './files.js';
+import {
+  loadFriendsData, saveFriendsData,
+  addFriend, removeFriend, isFriend, setNickname,
+  blockPeer, unblockPeer, isBlocked,
+  sendDM, sendDMTyping, handleIncomingDM,
+  handleIncomingFriendRequest, handleIncomingFriendResponse,
+  respondToFriendRequest,
+  startDMCall, handleDMCallInvite, handleDMCallAccept, handleDMCallEnd, openDMCallView,
+  openFriendsView, closeFriendsView,
+  renderFriendsSidebar, renderFriendsGrid, renderFriendsBadge,
+  openDMWith, showPeerProfile,
+} from './friends.js';
 import {
   initTheme, toggleTheme, applyTheme,
   toast, setStatus, updateMyInfo, closeModal,
@@ -31,7 +43,7 @@ import {
   toggleSidebar, closeSidebar, openNetPanel, closeNetPanel,
   handleMentionInput, moveMentionSelection, confirmMention, closeMentionPopup,
   renderMentionText,
-  openCallView, closeCallView, expandCallTile, fullscreenTile,
+  openCallView, closeCallView, openDMCallViewUI, closeDMCallView, expandCallTile, fullscreenTile,
   setReplyTarget, clearReplyTarget, scrollToMessage,
 } from './ui.js';
 import { copyToClipboard, escapeHtml } from './utils.js';
@@ -44,6 +56,10 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').ca
 function init() {
   initTheme();
   loadStorage();
+  loadFriendsData();
+
+  // Restore badge count from persisted dmUnread (computed at load)
+  import('./friends.js').then(fr => fr.renderFriendsBadge());
 
   state.cb.handleChatData       = handleChatData;
   state.cb.handlePeerDisconnect = handlePeerDisconnect;
@@ -81,8 +97,9 @@ function setupUI() {
   input.addEventListener('input', () => {
     input.style.height = '';
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-    send.disabled = !input.value.trim() || !state.activeRoomId;
-    onTyping();
+    send.disabled = !input.value.trim() || (!state.activeRoomId && !state.activeDMPeer);
+    if (state.activeDMPeer) sendDMTyping(state.activeDMPeer);
+    else onTyping();
     handleMentionInput(input);
   });
 
@@ -110,6 +127,16 @@ function setupUI() {
 }
 
 function sendMessageFromUI() {
+  if (state.activeDMPeer) {
+    const input = document.getElementById('msg-input');
+    const text  = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    input.style.height = '';
+    document.getElementById('send-btn').disabled = true;
+    sendDM(state.activeDMPeer, text);
+    return;
+  }
   import('./messaging.js').then(m => m.sendMessage());
 }
 
@@ -240,6 +267,35 @@ export function handleChatData(data, conn) {
       handlePeerLeaving(data);
       break;
 
+    case 'dm':
+    case 'dm_typing':
+      handleIncomingDM(data, conn);
+      break;
+
+    case 'friend_request':
+      handleIncomingFriendRequest(data, conn);
+      break;
+
+    case 'friend_response':
+      handleIncomingFriendResponse(data, conn);
+      break;
+
+    case 'dm_call_invite':
+      handleDMCallInvite(data, conn);
+      break;
+
+    case 'dm_call_accept':
+      handleDMCallAccept(data, conn);
+      break;
+
+    case 'dm_call_end':
+      handleDMCallEnd(data, conn);
+      break;
+
+    case 'dm_voice':
+      handleDMVoiceData(data, conn);
+      break;
+
     // ── Voice ──────────────────────────────────────────────────────────────
     case 'voice_channel_created':
       if (rid) handleVoiceChannelCreated(rid, data);
@@ -326,6 +382,12 @@ function showSettings() {
   document.getElementById('settings-modal').classList.remove('hidden');
 }
 
+function clearData() {
+  if (confirm('Erase ALL local data — rooms, messages, identity, friends, DMs? This cannot be undone.')) {
+    clearAllData();
+  }
+}
+
 function saveSettings() {
   const name = document.getElementById('settings-name').value.trim();
   if (name) { state.myName = name; updateMyInfo(); saveStorage(); }
@@ -369,9 +431,9 @@ function manualConnect() {
       }, () => toast('Could not connect.', 'error'));
     });
   } else {
-    import('./peer.js').then(p => {
-      p.connectTo(pid, () => toast('Connected!', 'success'), () => toast('Could not connect.', 'error'));
-    });
+    // Peer ID only → open as DM
+    openDMWith(pid, pid);
+    openFriendsView();
   }
 }
 
@@ -428,6 +490,87 @@ Object.assign(window, {
   _gmReply: (msgId, author, content) => setReplyTarget(msgId, author, content),
   _gmScrollToMsg: (msgId) => scrollToMessage(msgId),
   _gmClearReply: () => clearReplyTarget(),
+
+  // ── Friends / DM ────────────────────────────────────────────────────────
+  _gmOpenFriends:    () => openFriendsView(),
+  _gmOpenDM:         (pid, name) => openDMWith(pid, name),
+  _gmOpenDMById:     () => {
+    const el = document.getElementById('dm-peer-id-input');
+    const pid = el?.value.trim();
+    if (!pid) { toast('Enter a Peer ID', 'error'); return; }
+    if (el) el.value = '';
+    openDMWith(pid, pid);
+  },
+  _gmAddFriend:      (pid, name) => addFriend(pid, name),
+  _gmRemoveFriend:   (pid) => removeFriend(pid),
+  _gmBlockPeer:      (pid, name) => blockPeer(pid, name),
+  _gmUnblockPeer:    (pid) => unblockPeer(pid),
+  _gmAddFriendDM:    (pid, name) => { addFriend(pid, name); openDMWith(pid, name); },
+  _gmUnfriendConfirm:(pid) => {
+    const name = state.friends?.[pid]?.name || pid;
+    if (confirm('Unfriend ' + name + '?')) { removeFriend(pid); openDMWith(pid, name); }
+  },
+  _gmBlockFromDM:    (pid, name) => { blockPeer(pid, name); openDMWith(pid, name); },
+
+  // ── Peer profile popup ───────────────────────────────────────────────────
+  _gmShowPeerProfile:(pid, name) => showPeerProfile(pid, name),
+  _gmClosePeerProfile: () => {
+    const el = document.getElementById('peer-profile-popup');
+    if (el) el.classList.add('hidden');
+  },
+  _gmPPMessage:   (pid, name) => { window._gmClosePeerProfile(); openDMWith(pid, name); },
+  _gmPPAddFriend: (pid, name) => { addFriend(pid, name); showPeerProfile(pid, name); },
+  _gmPPSetNickname: (pid) => {
+    const current = state.friends?.[pid]?.nickname || '';
+    const nick = prompt('Set nickname (leave blank to clear):', current);
+    if (nick === null) return;
+    setNickname(pid, nick);
+    showPeerProfile(pid, nick.trim() || state.friends?.[pid]?.name || pid);
+  },
+  _gmPPUnfriend:  (pid, name) => { removeFriend(pid); window._gmClosePeerProfile(); },
+  _gmPPBlock:     (pid, name) => { blockPeer(pid, name); window._gmClosePeerProfile(); },
+  _gmPPUnblock:   (pid) => { unblockPeer(pid); window._gmClosePeerProfile(); },
+
+  // DM call — joins first shared room's voice channel
+  _gmDMCall: (peerId) => {
+    import('./friends.js').then(fr => fr.startDMCall(peerId));
+  },
+
+  // Friend requests
+  _gmAcceptFriendReq:  (pid, reqId) => respondToFriendRequest(pid, reqId, true),
+  _gmDeclineFriendReq: (pid, reqId) => respondToFriendRequest(pid, reqId, false),
+
+  // DM call accept / decline from incoming banner
+  _gmAcceptDMCall: (pid, name) => {
+    const banner = document.getElementById('dm-call-banner');
+    if (banner) banner.remove();
+    const conn = state.peerConns[pid]?.conn;
+    if (conn?.open) try { conn.send({ type: 'dm_call_accept', from: state.myId, fromName: state.myName }); } catch {}
+    state.dmCall = { peerId: pid, peerName: name, active: true, initiator: false };
+    openDMCallView(pid, name);
+    import('./voice.js').then(v => v.startDMCallAudio?.(pid));
+  },
+  _gmDeclineDMCall: (pid) => {
+    const banner = document.getElementById('dm-call-banner');
+    if (banner) banner.remove();
+    const conn = state.peerConns[pid]?.conn;
+    if (conn?.open) try { conn.send({ type: 'dm_call_end', from: state.myId }); } catch {}
+  },
+  _gmEndDMCall: (pid) => {
+    const conn = state.peerConns[pid]?.conn;
+    if (conn?.open) try { conn.send({ type: 'dm_call_end', from: state.myId }); } catch {}
+    import('./voice.js').then(v => v.stopDMCallAudio?.());
+    state.dmCall = null;
+    import('./ui.js').then(ui => ui.closeDMCallView());
+    toast('Call ended', 'info');
+  },
+  // DM call media controls (reuse voice.js mute/deafen)
+  _gmDMCallToggleMute:   (pid) => import('./voice.js').then(v => { v.toggleMuteRaw?.(); import('./ui.js').then(ui => ui.openDMCallViewUI(pid, state.dmCall?.peerName || pid)); }),
+  _gmDMCallToggleDeafen: (pid) => import('./voice.js').then(v => { v.toggleDeafenRaw?.(); import('./ui.js').then(ui => ui.openDMCallViewUI(pid, state.dmCall?.peerName || pid)); }),
+  _gmDMCallToggleCam:    (pid) => import('./voice.js').then(v => v.startDMCallCam?.(pid) || v.stopVideoShare?.(null, 'cam')),
+  _gmDMCallToggleScreen: (pid) => import('./voice.js').then(v => v.startDMCallScreen?.(pid) || v.stopVideoShare?.(null, 'screen')),
+
+  clearData,
   openManageCandidates: () => {
     if (!state.activeRoomId) return;
     renderManageList();

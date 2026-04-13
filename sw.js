@@ -1,4 +1,4 @@
-const CACHE = 'gilgamesh-v1.2.2';
+const CACHE = 'gilgamesh-v1.3.0';
 const PRECACHE = [
   './',
   './index.html',
@@ -18,6 +18,7 @@ const PRECACHE = [
   './js/ui.js',
   './js/utils.js',
   './js/voice.js',
+  './js/friends.js',
 ];
 
 self.addEventListener('install',  e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE))));
