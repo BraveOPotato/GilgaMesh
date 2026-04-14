@@ -280,13 +280,84 @@ async function rejoineVoiceSubtree(rid, vcId) {
       return;
     }
 
-    // No non-voice children — just detach upward and findAndJoinParent
-    if (r.parentId) {
+    // No non-voice children to hand off.
+    // Before deciding to stay in place, check whether there is a same-channel
+    // peer we could migrate toward.  If our current parent is already in the
+    // same voice channel, or we have same-voice children, staying is optimal.
+    // But if our parent is non-voice (or we are root) AND a same-channel peer
+    // exists in the clusterMap, we should detach and run findAndJoinParent so
+    // voice-affinity sorting can cluster us with that peer.
+    const parentVcId = r.parentId ? (r.clusterMap[r.parentId]?.voiceChannelId || null) : null;
+    const parentInSameVc = parentVcId === vcId;
+    const hasSameVcChild = r.childIds.some(cid => r.clusterMap[cid]?.voiceChannelId === vcId);
+    const sameVcPeerExists = Object.entries(r.clusterMap).some(
+      ([pid, e]) => pid !== state.myId && e.voiceChannelId === vcId
+    );
+
+    if (parentInSameVc || hasSameVcChild) {
+      // Already optimally placed inside the voice subtree — stay put
+      console.log(`[voice] rejoineVoiceSubtree(${rid}) joining — already in voice subtree, staying in place (parent=${r.parentId||'(root)'}, children=${r.childIds.length})`);
+      r._joiningParent = false; r._becomeRootRetries = 0;
+      updateClusterMapSelf(rid);
+      broadcastClusterMap(rid);
+      return;
+    }
+
+    if (r.childIds.length > 0) {
+      // We have children but none are same-voice and parent is non-voice.
+      // Broadcast the new voice state and let the rebalancer handle migration
+      // gradually — detaching now would orphan our children.
+      console.log(`[voice] rejoineVoiceSubtree(${rid}) joining — has children, broadcasting and staying (parent=${r.parentId||'(root)'}, children=${r.childIds.length})`);
+      r._joiningParent = false; r._becomeRootRetries = 0;
+      updateClusterMapSelf(rid);
+      broadcastClusterMap(rid);
+      return;
+    }
+
+    if (r.parentId && sameVcPeerExists) {
+      // Leaf node with a non-voice parent and a same-channel peer available.
+      // Detach and re-join with voice affinity so we cluster with that peer.
+      // Wait 500ms before detaching so that if two siblings join simultaneously,
+      // the one whose ID sorts lower yields — only one migrates, the other
+      // stays and becomes the parent that the migrating node adopts under.
+      const sameVcPeers = Object.entries(r.clusterMap)
+        .filter(([pid, e]) => pid !== state.myId && e.voiceChannelId === vcId)
+        .map(([pid]) => pid);
+      const shouldYield = sameVcPeers.every(pid => pid > state.myId);
+      const migrateDelay = shouldYield ? 700 : 300;
+      console.log(`[voice] rejoineVoiceSubtree(${rid}) joining — detaching from non-voice parent ${r.parentId} to seek same-channel peer (delay=${migrateDelay}ms)`);
+      await new Promise(res => setTimeout(res, migrateDelay));
+      // Re-check: a same-channel peer may have already migrated under us during the wait
+      if (r.childIds.some(cid => r.clusterMap[cid]?.voiceChannelId === vcId)) {
+        console.log(`[voice] rejoineVoiceSubtree(${rid}) joining — same-channel child arrived during wait, staying`);
+        r._joiningParent = false; r._becomeRootRetries = 0;
+        updateClusterMapSelf(rid); broadcastClusterMap(rid);
+        return;
+      }
+
+      // No non-voice children — just detach upward and findAndJoinParent
       if (r.parentConn?.open) {
         try { r.parentConn.send({ type: 'peer_leaving', roomId: rid, id: state.myId, name: state.myName }); } catch {}
       }
       r.parentId = null; r.parentConn = null; r.grandparentId = null; r.distanceFromRoot = 0;
+      r._joiningParent = false; r._becomeRootRetries = 0;
+      updateClusterMapSelf(rid);
+      broadcastClusterMap(rid);
+      await new Promise(res => setTimeout(res, 200));
+      findAndJoinParent(rid, { force: true });
+      return;
     }
+
+    // No same-channel peer exists yet, or we have no parent — stay/join normally
+    if (r.parentId) {
+      console.log(`[voice] rejoineVoiceSubtree(${rid}) joining — no same-channel peer yet, staying under ${r.parentId}`);
+      r._joiningParent = false; r._becomeRootRetries = 0;
+      updateClusterMapSelf(rid);
+      broadcastClusterMap(rid);
+      return;
+    }
+
+    // Truly isolated — run a fresh join
     r._joiningParent = false; r._becomeRootRetries = 0;
     updateClusterMapSelf(rid);
     broadcastClusterMap(rid);
@@ -986,6 +1057,20 @@ export function handleBecomeMyChild(data, conn) {
   }
 
   console.log(`[voice] handleBecomeMyChild(${rid}) — ${data.requesterId} (${data.name||'?'}) will become our new parent`);
+
+  // The requester may currently be one of our children (e.g. a voice relay child
+  // that is now transitioning to become our non-voice parent after we leave voice).
+  // Remove them from childIds/childConns NOW — before we send the adopt_request —
+  // so we never hold them as both child and parent simultaneously.
+  if (r.childIds.includes(data.requesterId)) {
+    console.log(`[voice] handleBecomeMyChild(${rid}) — evicting ${data.requesterId} from childIds before role-swap`);
+    r.childIds = r.childIds.filter(id => id !== data.requesterId);
+    delete r.childConns[data.requesterId];
+    import('./mesh.js').then(mesh => {
+      mesh.updateClusterMapSelf(rid);
+      mesh.broadcastClusterMap(rid);
+    });
+  }
 
   // Connect to the requester and send them an adopt_request so they accept us
   // as their child.  We include fromBecomeMyChild:true so the receiver's
