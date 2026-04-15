@@ -1373,10 +1373,16 @@ export function toggleDeafenRaw() {
 export async function startDMCallCam(peerId) {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    // Assign AFTER getOrCreatePC so the new stream isn't picked up by the
+    // _getOrCreatePC track-seeding loop — preventing duplicate addTrack errors.
+    const pc = _getOrCreatePC(peerId, '__dm__');
     _localVideoStream.cam = stream;
     import('./ui.js').then(ui => ui.setLocalVideoStream?.(stream, 'cam'));
-    const pc = _getOrCreatePC(peerId, '__dm__');
-    for (const t of stream.getTracks()) pc.addTrack(t, stream);
+    // Dedup: only add tracks not already present as a sender
+    const existingSenders = pc.getSenders().map(s => s.track);
+    for (const t of stream.getTracks()) {
+      if (!existingSenders.includes(t)) pc.addTrack(t, stream);
+    }
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     const conn = state.peerConns[peerId]?.conn;
@@ -1390,11 +1396,18 @@ export async function startDMCallScreen(peerId) {
     console.log(`[video] startDMCallScreen — peerId=${peerId}`);
     const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
     stream.getVideoTracks()[0].onended = () => stopVideoShare('__dm__', 'screen');
+    // Assign AFTER _getOrCreatePC so the new stream is NOT picked up by the
+    // track-seeding loop inside _getOrCreatePC, which would cause a duplicate
+    // addTrack and throw a DOMException — silently aborting the offer send.
+    const pc = _getOrCreatePC(peerId, '__dm__');
     _localVideoStream.screen = stream;
     import('./ui.js').then(ui => ui.setLocalVideoStream?.(stream, 'screen'));
-    const pc = _getOrCreatePC(peerId, '__dm__');
     console.log(`[video] startDMCallScreen — got PC, sigState=${pc.signalingState}, connState=${pc.connectionState}`);
-    for (const t of stream.getTracks()) pc.addTrack(t, stream);
+    // Dedup: only add tracks not already registered as a sender on this PC.
+    const existingSenders = pc.getSenders().map(s => s.track);
+    for (const t of stream.getTracks()) {
+      if (!existingSenders.includes(t)) pc.addTrack(t, stream);
+    }
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     const conn = state.peerConns[peerId]?.conn;
