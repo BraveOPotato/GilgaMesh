@@ -715,11 +715,15 @@ export function renderFriendsBadge() {
 // ─── PEER PROFILE POPUP ───────────────────────────────────────────────────────
 export function showPeerProfile(peerId, name) {
   if (!peerId || peerId === state.myId) return;
-  const peerName = name || state.friends?.[peerId]?.name || peerId;
+  // originalName = the "real" name stored on the friend record (before nickname)
+  const originalName = state.friends?.[peerId]?.name || name || peerId;
+  const nickname     = state.friends?.[peerId]?.nickname || '';
+  // Display name: nickname if set, otherwise original
+  const displayName  = nickname || originalName;
   const fri   = isFriend(peerId);
   const blk   = isBlocked(peerId);
   const color = stringToColor(peerId);
-  const safeN = peerName.replace(/'/g, "\\'");
+  const safeN = displayName.replace(/'/g, "\\'");
 
   let el = document.getElementById('peer-profile-popup');
   if (!el) {
@@ -729,13 +733,18 @@ export function showPeerProfile(peerId, name) {
     document.body.appendChild(el);
   }
 
+  // Show "aka <originalName>" only when a nickname is set AND it differs from the original name
+  const akaLine = (fri && nickname && nickname !== originalName)
+    ? `<div style="font-size:11px;color:var(--accent);font-family:var(--mono)">aka ${escapeHtml(originalName)}</div>`
+    : '';
+
   el.innerHTML = `<div class="modal" style="max-width:300px;padding:20px;position:relative" onclick="event.stopPropagation()">
     <button onclick="window._gmClosePeerProfile()" style="position:absolute;top:12px;right:12px;background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:16px;padding:3px 7px;border-radius:4px">✕</button>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">
-      <div style="width:48px;height:48px;border-radius:50%;background:${color}22;border:2px solid ${color}55;color:${color};display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;flex-shrink:0">${(peerName||'?').charAt(0).toUpperCase()}</div>
+      <div style="width:48px;height:48px;border-radius:50%;background:${color}22;border:2px solid ${color}55;color:${color};display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;flex-shrink:0">${(displayName||'?').charAt(0).toUpperCase()}</div>
       <div style="min-width:0">
-        <div style="font-size:15px;font-weight:700">${escapeHtml(peerName)}</div>
-        ${fri && state.friends[peerId]?.nickname ? `<div style="font-size:11px;color:var(--accent);font-family:var(--mono)">aka ${escapeHtml(state.friends[peerId].nickname)}</div>` : ''}
+        <div style="font-size:15px;font-weight:700">${escapeHtml(displayName)}</div>
+        ${akaLine}
         <div style="font-size:10px;font-family:var(--mono);color:var(--text-muted);overflow:hidden;text-overflow:ellipsis">${escapeHtml(peerId)}</div>
       </div>
     </div>

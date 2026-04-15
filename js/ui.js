@@ -5,6 +5,15 @@ import { genId } from './ids.js';
 import { roomIsRoot, totalConnCount } from './state.js';
 import { saveStorage } from './storage.js';
 
+// ─── PEER DISPLAY NAME (nickname-aware, cross-room) ──────────────────────────
+// Priority: nickname set on friend record > raw peer name > peerId
+function _resolveDisplayName(pid, rawName) {
+  if (!pid) return rawName || '';
+  const nick = state.friends?.[pid]?.nickname;
+  if (nick) return nick;
+  return rawName || state.friends?.[pid]?.name || pid;
+}
+
 // ─── MARKDOWN RENDERER ────────────────────────────────────────────────────────
 // Inline-only markdown: **bold**, *italic*, ~~strike~~, `code`, [link](url),
 // and block-level: ``` fenced code, > blockquote, - / * / 1. lists, # headings.
@@ -328,21 +337,22 @@ export function renderRoomSidebar() {
     if (aOnline !== bOnline) return bOnline ? 1 : -1; // online first
     return (a.name || a.id).localeCompare(b.name || b.id);
   }).map(p => {
-    const pc        = state.peerConns[p.id];
-    const alive     = !!(pc?.conn?.open);
-    const checking  = state.peerChecking.has(p.id);
-    const isParent  = p.id === r.parentId;
-    const isChild   = r.childIds.includes(p.id);
-    const color     = stringToColor(p.id);
-    const role      = isParent ? 'parent' : isChild ? 'child' : '';
-    const dotClass  = checking ? 'searching' : isParent ? 'server' : alive ? 'online' : 'offline';
-    const safeN = (p.name||p.id).replace(/'/g,"\'");
+    const pc          = state.peerConns[p.id];
+    const alive       = !!(pc?.conn?.open);
+    const checking    = state.peerChecking.has(p.id);
+    const isParent    = p.id === r.parentId;
+    const isChild     = r.childIds.includes(p.id);
+    const color       = stringToColor(p.id);
+    const role        = isParent ? 'parent' : isChild ? 'child' : '';
+    const dotClass    = checking ? 'searching' : isParent ? 'server' : alive ? 'online' : 'offline';
+    const displayName = _resolveDisplayName(p.id, p.name);
+    const safeN       = displayName.replace(/'/g,"\'");
     return `<div class="peer-item${alive || checking ? '' : ' peer-offline'}" style="cursor:pointer" onclick="window._gmShowPeerProfile('${p.id}','${safeN}')">
       <div class="peer-avatar" style="background:${color}20;border-color:${color}${alive || checking ? '40' : '20'};color:${color}${alive || checking ? '' : ';opacity:.5'}">
-        ${(p.name || 'P').charAt(0).toUpperCase()}
+        ${(displayName || 'P').charAt(0).toUpperCase()}
         <div class="peer-status-dot ${dotClass}"></div>
       </div>
-      <span class="peer-name" style="${alive || checking ? '' : 'opacity:.45'}">${escapeHtml(p.name || p.id)}</span>
+      <span class="peer-name" style="${alive || checking ? '' : 'opacity:.45'}">${escapeHtml(displayName)}</span>
       ${checking ? '<span class="peer-role" style="color:var(--accent);opacity:.7">checking…</span>' : role ? `<span class="peer-role">${role}</span>` : ''}
     </div>`;
   }).join('');

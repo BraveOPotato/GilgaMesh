@@ -576,7 +576,18 @@ function findNonVoiceParentCandidate(rid, excludeId = null) {
 async function startLocalAudio() {
   if (voiceState.localStream) return;
   voiceState.localStream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    audio: {
+      echoCancellation:    true,
+      noiseSuppression:    true,
+      autoGainControl:     true,
+      // Legacy Chrome hints — suppresses system/loopback audio bleed
+      googEchoCancellation:     true,
+      googNoiseSuppression:     true,
+      googHighpassFilter:       true,
+      googAutoGainControl:      true,
+      googAudioMirroring:       false,
+      suppressLocalAudioPlayback: true,
+    },
     video: false,
   });
   voiceState.captureCtx = new AudioContext({ sampleRate: 48000 });

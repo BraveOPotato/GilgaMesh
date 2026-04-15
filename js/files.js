@@ -7,7 +7,7 @@ import { formatBytes } from './utils.js';
 
 // ─── TRIGGER FILE SHARE UI ────────────────────────────────────────────────────
 export function triggerFileShare() {
-  if (!state.activeRoomId) return;
+  if (!state.activeRoomId && !state.activeDMPeer) return;
   document.getElementById('file-share-link-area').classList.add('hidden');
   document.getElementById('file-share-content').classList.remove('hidden');
   document.getElementById('file-share-modal').classList.remove('hidden');
@@ -52,6 +52,26 @@ function prepareFileShare(file) {
     }
   }, 1000);
 
+  // ── DM context ───────────────────────────────────────────────────────────
+  if (state.activeDMPeer && !state.activeRoomId) {
+    const peerId = state.activeDMPeer;
+    const dmMsg = {
+      type: 'dm_message', id: genId(),
+      from: state.myId, fromName: state.myName,
+      content: null, ts: Date.now(), msgType: 'file',
+      fileShare: { token, fromId: state.myId, fromName: state.myName, filename: file.name, size: file.size, expires },
+    };
+    // Store locally
+    if (!state.dms[peerId]) state.dms[peerId] = [];
+    state.dms[peerId].push(dmMsg);
+    import('./friends.js').then(f => { f.saveFriendsData?.(); f.renderDMThreadContent?.(peerId); });
+    // Send to peer if connected
+    const conn = state.peerConns[peerId]?.conn;
+    if (conn?.open) try { conn.send(dmMsg); } catch {}
+    return;
+  }
+
+  // ── Room context ─────────────────────────────────────────────────────────
   if (!state.activeRoomId) return;
   const r = state.rooms[state.activeRoomId]; if (!r) return;
   const chatMsg = {
