@@ -1113,6 +1113,8 @@ export function getActiveSpeakers(rid) {
 
 const _videoPCs   = {};  // peerId → RTCPeerConnection
 const _localVideoStream = { cam: null, screen: null }; // currently active local streams
+const _remoteVideoStreams = {}; // peerId → MediaStream — survives DOM rebuilds
+const _iceCandidateQueue = {}; // peerId → RTCIceCandidate[] queued before remoteDesc is set
 
 const VIDEO_ICE = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -1124,24 +1126,41 @@ const VIDEO_ICE = [
 
 function _getOrCreatePC(peerId, rid) {
   if (_videoPCs[peerId]?.connectionState === 'closed') delete _videoPCs[peerId];
-  if (_videoPCs[peerId]) return _videoPCs[peerId];
+  if (_videoPCs[peerId]) {
+    console.log(`[video] _getOrCreatePC(${peerId}) — reusing existing PC, state=${_videoPCs[peerId].connectionState}, sigState=${_videoPCs[peerId].signalingState}`);
+    return _videoPCs[peerId];
+  }
 
+  console.log(`[video] _getOrCreatePC(${peerId}) — creating fresh PC for rid=${rid}`);
   const pc = new RTCPeerConnection({ iceServers: VIDEO_ICE });
   _videoPCs[peerId] = pc;
 
   pc.onicecandidate = ({ candidate }) => {
     if (!candidate) return;
+    console.log(`[video] onicecandidate → sending to ${peerId}`);
     _sendVideoSignal(peerId, rid, { type: 'video_ice', candidate: candidate.toJSON() });
   };
 
+  pc.onicegatheringstatechange = () => console.log(`[video] ICE gathering state: ${pc.iceGatheringState} (peer=${peerId})`);
+  pc.oniceconnectionstatechange = () => console.log(`[video] ICE connection state: ${pc.iceConnectionState} (peer=${peerId})`);
+
   pc.ontrack = (e) => {
-    console.log(`[voice] video track received from ${peerId}`);
-    import('./ui.js').then(ui => ui.setRemoteVideoTrack(peerId, e.streams[0]));
+    console.log(`[video] ✅ ontrack fired from ${peerId}, kind=${e.track.kind}, readyState=${e.track.readyState}, streams=${e.streams.length}`);
+    const stream = (e.streams && e.streams[0]) || new MediaStream([e.track]);
+    _remoteVideoStreams[peerId] = stream;
+    import('./ui.js').then(ui => {
+      const el = document.getElementById(`calltile-vid-${peerId}`);
+      console.log(`[video] setRemoteVideoTrack — DOM element exists: ${!!el}`);
+      ui.setRemoteVideoTrack(peerId, stream);
+    });
   };
 
   pc.onconnectionstatechange = () => {
+    console.log(`[video] connectionState: ${pc.connectionState} (peer=${peerId})`);
     if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
       delete _videoPCs[peerId];
+      delete _remoteVideoStreams[peerId];
+      delete _iceCandidateQueue[peerId];
       import('./ui.js').then(ui => ui.clearRemoteVideo(peerId));
     }
   };
@@ -1158,29 +1177,61 @@ function _getOrCreatePC(peerId, rid) {
 
 function _sendVideoSignal(peerId, rid, msg) {
   const conn = state.peerConns[peerId]?.conn;
-  if (conn?.open) try { conn.send({ ...msg, roomId: rid }); } catch {}
+  console.log(`[video] _sendVideoSignal type=${msg.type} to=${peerId} conn.open=${conn?.open}`);
+  if (conn?.open) try { conn.send({ ...msg, roomId: rid }); } catch(e) { console.error('[video] send failed', e); }
 }
 
 // Called by handleVideoSignal in main.js when a video_offer/answer/ice arrives
 export async function handleVideoSignal(data, conn) {
   const rid    = data.roomId;
   const peerId = conn.peer;
+  console.log(`[video] handleVideoSignal type=${data.type} from=${peerId} rid=${rid}`);
   // Allow '__dm__' sentinel for direct DM calls; skip room-lookup guard
   const r = state.rooms[rid];
-  if (!r && rid !== '__dm__') return;
+  if (!r && rid !== '__dm__') { console.warn(`[video] dropped — rid ${rid} not found`); return; }
 
   if (data.type === 'video_offer') {
+    console.log(`[video] handling offer from ${peerId} — closing any existing PC`);
+    if (_videoPCs[peerId]) {
+      try { _videoPCs[peerId].close(); } catch {}
+      delete _videoPCs[peerId];
+    }
+    delete _iceCandidateQueue[peerId];
     const pc = _getOrCreatePC(peerId, rid);
     await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    console.log(`[video] setRemoteDescription done, sigState=${pc.signalingState}`);
+    for (const c of (_iceCandidateQueue[peerId] || [])) {
+      try { await pc.addIceCandidate(c); } catch {}
+    }
+    delete _iceCandidateQueue[peerId];
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
+    console.log(`[video] answer created, sending back to ${peerId}`);
     _sendVideoSignal(peerId, rid, { type: 'video_answer', sdp: pc.localDescription });
   } else if (data.type === 'video_answer') {
-    await _videoPCs[peerId]?.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    const pc = _videoPCs[peerId];
+    if (!pc) { console.warn(`[video] video_answer: no PC for ${peerId}`); return; }
+    console.log(`[video] setting remote answer from ${peerId}, sigState=${pc.signalingState}`);
+    await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    for (const c of (_iceCandidateQueue[peerId] || [])) {
+      try { await pc.addIceCandidate(c); } catch {}
+    }
+    delete _iceCandidateQueue[peerId];
   } else if (data.type === 'video_ice') {
-    try { await _videoPCs[peerId]?.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch {}
+    const pc = _videoPCs[peerId];
+    const candidate = new RTCIceCandidate(data.candidate);
+    console.log(`[video] video_ice from ${peerId}, pc exists=${!!pc}, hasRemoteDesc=${!!(pc?.remoteDescription)}`);
+    if (pc && pc.remoteDescription) {
+      try { await pc.addIceCandidate(candidate); } catch(e) { console.warn('[video] addIceCandidate failed', e); }
+    } else {
+      if (!_iceCandidateQueue[peerId]) _iceCandidateQueue[peerId] = [];
+      _iceCandidateQueue[peerId].push(candidate);
+      console.log(`[video] queued ICE candidate for ${peerId}, queue size=${_iceCandidateQueue[peerId].length}`);
+    }
   } else if (data.type === 'video_stop') {
     // Remote peer stopped sharing
+    delete _remoteVideoStreams[peerId];
+    delete _iceCandidateQueue[peerId];
     import('./ui.js').then(ui => ui.clearRemoteVideo(peerId));
     if (_videoPCs[peerId]) {
       _videoPCs[peerId].close();
@@ -1236,11 +1287,17 @@ export function stopVideoShare(rid, label = 'cam') {
   import('./ui.js').then(ui => ui.clearLocalVideo(label));
 
   // Notify peers
-  const r = state.rooms[rid]; if (!r) return;
-  const peers = Object.entries(r.clusterMap)
-    .filter(([pid, e]) => e.voiceChannelId === r.myVoiceChannelId && pid !== state.myId)
-    .map(([pid]) => pid);
-  for (const peerId of peers) _sendVideoSignal(peerId, rid, { type: 'video_stop' });
+  if (rid === '__dm__') {
+    // DM call: notify the direct call peer only
+    const dmPeerId = state.dmCall?.peerId;
+    if (dmPeerId) _sendVideoSignal(dmPeerId, '__dm__', { type: 'video_stop' });
+  } else {
+    const r = state.rooms[rid]; if (!r) return;
+    const peers = Object.entries(r.clusterMap)
+      .filter(([pid, e]) => e.voiceChannelId === r.myVoiceChannelId && pid !== state.myId)
+      .map(([pid]) => pid);
+    for (const peerId of peers) _sendVideoSignal(peerId, rid, { type: 'video_stop' });
+  }
 
   // If no more video, tear down all PCs
   if (!_localVideoStream.cam && !_localVideoStream.screen) {
@@ -1260,14 +1317,9 @@ export function reattachActiveStreams() {
   if (localStream) {
     import('./ui.js').then(ui => ui.setLocalVideoStream(localStream, _localVideoStream.screen ? 'screen' : 'cam'));
   }
-  // Reattach remote streams from open PeerConnections
-  for (const [peerId, pc] of Object.entries(_videoPCs)) {
-    const receivers = pc.getReceivers?.() || [];
-    const videoReceiver = receivers.find(r => r.track?.kind === 'video' && r.track.readyState === 'live');
-    if (videoReceiver) {
-      const stream = new MediaStream([videoReceiver.track]);
-      import('./ui.js').then(ui => ui.setRemoteVideoTrack(peerId, stream));
-    }
+  // Reattach remote streams from cache — works even if ontrack fired before DOM was ready
+  for (const [peerId, stream] of Object.entries(_remoteVideoStreams)) {
+    if (stream) import('./ui.js').then(ui => ui.setRemoteVideoTrack(peerId, stream));
   }
 }
 
@@ -1335,16 +1387,23 @@ export async function startDMCallCam(peerId) {
 
 export async function startDMCallScreen(peerId) {
   try {
+    console.log(`[video] startDMCallScreen — peerId=${peerId}`);
     const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
     stream.getVideoTracks()[0].onended = () => stopVideoShare('__dm__', 'screen');
     _localVideoStream.screen = stream;
     import('./ui.js').then(ui => ui.setLocalVideoStream?.(stream, 'screen'));
     const pc = _getOrCreatePC(peerId, '__dm__');
+    console.log(`[video] startDMCallScreen — got PC, sigState=${pc.signalingState}, connState=${pc.connectionState}`);
     for (const t of stream.getTracks()) pc.addTrack(t, stream);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     const conn = state.peerConns[peerId]?.conn;
+    console.log(`[video] startDMCallScreen — conn.open=${conn?.open}, sending offer`);
     if (conn?.open) conn.send({ type: 'video_offer', sdp: pc.localDescription, roomId: '__dm__' });
+    else console.error(`[video] startDMCallScreen — NO OPEN CONN to ${peerId}!`);
     import('./ui.js').then(ui => ui.toast?.('Screen sharing', 'success'));
-  } catch { import('./ui.js').then(ui => ui.toast?.('Screen share cancelled', 'info')); }
+  } catch(e) {
+    console.error('[video] startDMCallScreen failed:', e);
+    import('./ui.js').then(ui => ui.toast?.('Screen share cancelled', 'info'));
+  }
 }

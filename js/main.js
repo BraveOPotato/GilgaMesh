@@ -567,8 +567,24 @@ Object.assign(window, {
   // DM call media controls (reuse voice.js mute/deafen)
   _gmDMCallToggleMute:   (pid) => import('./voice.js').then(v => { v.toggleMuteRaw?.(); import('./ui.js').then(ui => ui.openDMCallViewUI(pid, state.dmCall?.peerName || pid)); }),
   _gmDMCallToggleDeafen: (pid) => import('./voice.js').then(v => { v.toggleDeafenRaw?.(); import('./ui.js').then(ui => ui.openDMCallViewUI(pid, state.dmCall?.peerName || pid)); }),
-  _gmDMCallToggleCam:    (pid) => import('./voice.js').then(v => v.startDMCallCam?.(pid) || v.stopVideoShare?.(null, 'cam')),
-  _gmDMCallToggleScreen: (pid) => import('./voice.js').then(v => v.startDMCallScreen?.(pid) || v.stopVideoShare?.(null, 'screen')),
+  _gmDMCallToggleCam: (pid) => {
+    import('./ui.js').then(ui => {
+      if (ui.isLocalCamActive?.()) {
+        import('./voice.js').then(v => v.stopVideoShare?.('__dm__', 'cam'));
+      } else {
+        import('./voice.js').then(v => v.startDMCallCam?.(pid));
+      }
+    });
+  },
+  _gmDMCallToggleScreen: (pid) => {
+    import('./ui.js').then(ui => {
+      if (ui.isLocalScreenActive?.()) {
+        import('./voice.js').then(v => v.stopVideoShare?.('__dm__', 'screen'));
+      } else {
+        import('./voice.js').then(v => v.startDMCallScreen?.(pid));
+      }
+    });
+  },
 
   clearData,
   openManageCandidates: () => {

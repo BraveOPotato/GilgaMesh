@@ -694,9 +694,11 @@ export function openDMCallViewUI(peerId, peerName) {
   const activeSpeakers = state.dmCallSpeakers || {};
 
   // Build tiles: me + the peer
+  // peerRinging: true when we're the initiator and the peer hasn't accepted yet
+  const peerRinging = !!(state.dmCall?.initiator && !state.dmCall?.peerJoined);
   const tiles = [
-    { id: state.myId, name: state.myName + ' (you)', color: myColor, isSelf: true },
-    { id: peerId,     name: peerName,                color,          isSelf: false },
+    { id: state.myId, name: state.myName + ' (you)', color: myColor, isSelf: true,  ringing: false },
+    { id: peerId,     name: peerName,                color,          isSelf: false, ringing: peerRinging },
   ];
 
   import('./voice.js').then(v => {
@@ -705,25 +707,33 @@ export function openDMCallViewUI(peerId, peerName) {
 
     const tileHtml = tiles.map(p => {
       const speaking = !!activeSpeakers[p.id];
-      return `<div class="call-tile${speaking ? ' call-tile-speaking' : ''}" id="calltile-${p.id}">
+      const avatarStyle = p.ringing
+        ? `background:${p.color}12;border:2px solid ${p.color}28;color:${p.color};filter:grayscale(1);opacity:0.45;`
+        : `background:${p.color}22;border:2px solid ${p.color}${speaking ? '' : '44'};color:${p.color};`;
+      const ringingBadge = p.ringing
+        ? `<div class="call-tile-ringing-badge" style="position:absolute;bottom:6px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--text-muted);white-space:nowrap;animation:vc-pulse 1.2s ease-in-out infinite">Ringing…</div>`
+        : '';
+      return `<div class="call-tile${speaking ? ' call-tile-speaking' : ''}" id="calltile-${p.id}" style="position:relative">
         <div class="call-tile-video-wrap" id="calltile-video-${p.id}">
           <video class="call-tile-video hidden" id="calltile-vid-${p.id}" autoplay playsinline ${p.isSelf ? 'muted' : ''}></video>
           <button class="call-tile-fullscreen hidden" id="calltile-fs-${p.id}"
             onclick="event.stopPropagation();window._gmFullscreenTile('${p.id}')" title="Fullscreen">⛶</button>
           <div class="call-tile-avatar${speaking ? ' vc-speaking-glow' : ''}" id="calltile-avatar-${p.id}"
-               style="background:${p.color}22;border:2px solid ${p.color}${speaking?'':' 44'};color:${p.color}">
+               style="${avatarStyle}transition:all .4s">
             ${(p.name||'?').charAt(0).toUpperCase()}
           </div>
         </div>
         <div class="call-tile-name">${escapeHtml(p.name)}</div>
+        ${ringingBadge}
       </div>`;
     }).join('');
 
+    const callStatus = peerRinging ? 'Ringing…' : 'Direct call';
     cv.innerHTML = `
       <div class="call-view-header">
         <span class="call-view-icon">📞</span>
         <span class="call-view-title">${escapeHtml(peerName)}</span>
-        <span class="call-view-count">Direct call</span>
+        <span class="call-view-count" id="call-view-status">${callStatus}</span>
         <button class="call-view-close icon-btn" onclick="window._gmEndDMCall('${peerId}')" title="End call">✕ End Call</button>
       </div>
       <div class="call-tiles-grid" id="call-tiles-grid">${tileHtml}</div>
@@ -736,13 +746,13 @@ export function openDMCallViewUI(peerId, peerName) {
           onclick="window._gmDMCallToggleDeafen('${peerId}')">
           ${deafened ? '🔕 Undeafen' : '🔊 Deafen'}
         </button>
-        <button class="call-ctrl-btn" id="call-cam-btn"
+        <button class="call-ctrl-btn${_localCamActive ? ' active-red' : ''}" id="call-cam-btn"
           onclick="window._gmDMCallToggleCam('${peerId}')" title="Toggle camera">
-          📷 Camera
+          ${_localCamActive ? '📷 Cam off' : '📷 Camera'}
         </button>
-        <button class="call-ctrl-btn" id="call-screen-btn"
+        <button class="call-ctrl-btn${_localScreenActive ? ' active-red' : ''}" id="call-screen-btn"
           onclick="window._gmDMCallToggleScreen('${peerId}')" title="Share screen">
-          🖥️ Share
+          ${_localScreenActive ? '🖥️ Stop Share' : '🖥️ Share'}
         </button>
         <button class="call-ctrl-btn danger" onclick="window._gmEndDMCall('${peerId}')" title="End call">
           📵 Leave
@@ -911,6 +921,9 @@ export function renderVoiceSpeakers(rid) {
 let _expandedTileId  = null;
 let _localCamActive  = false;
 let _localScreenActive = false;
+
+export function isLocalCamActive()    { return _localCamActive; }
+export function isLocalScreenActive() { return _localScreenActive; }
 
 export function setLocalVideoStream(stream, label) {
   const vid = document.getElementById(`calltile-vid-${state.myId}`);

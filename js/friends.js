@@ -577,16 +577,23 @@ export function renderDMThreadContent(peerId, name) {
 // updating the sidebar online dots shortly after the view opens.
 function _scanFriendPresence() {
   const friends = Object.keys(state.friends || {});
+  let anyPending = false;
   for (const pid of friends) {
     if (pid === state.myId) continue;
-    if (state.peerConns[pid]?.conn?.open) continue; // already connected
-    // Light probe: open connection, send a small ping, let normal heartbeat take over.
-    // We don't care if it fails — failure just means offline.
+    if (state.peerConns[pid]?.conn?.open) continue; // already connected — dot already green
+    anyPending = true;
+    // Short-circuit: if we get no response in 3 s the peer is offline; don't
+    // wait for the full CONN_TIMEOUT (20 s) before updating the dots.
+    const probeTimer = setTimeout(() => {
+      if (state.activeFriendsView) { renderFriendsSidebar(); renderFriendsGrid(); }
+    }, 3000);
     state.cb.connectTo?.(pid,
-      () => { if (state.activeFriendsView) { renderFriendsSidebar(); renderFriendsGrid(); } },
-      () => { /* offline — that's fine */ }
+      () => { clearTimeout(probeTimer); if (state.activeFriendsView) { renderFriendsSidebar(); renderFriendsGrid(); } },
+      () => { clearTimeout(probeTimer); if (state.activeFriendsView) { renderFriendsSidebar(); renderFriendsGrid(); } }
     );
   }
+  // If all friends already connected, re-render immediately so dots reflect live state
+  if (!anyPending) { renderFriendsSidebar(); renderFriendsGrid(); }
 }
 
 // ─── DIRECT DM CALL ──────────────────────────────────────────────────────────
@@ -634,7 +641,8 @@ export function handleDMCallInvite(data, conn) {
 export function handleDMCallAccept(data, conn) {
   const from = data.from || conn.peer;
   if (!state.dmCall || state.dmCall.peerId !== from) return;
-  state.dmCall.active = true;
+  state.dmCall.active     = true;
+  state.dmCall.peerJoined = true;   // un-grays the recipient avatar in the call view
   toast('Call connected', 'success');
   openDMCallView(from, _peerDisplayName(from));
   import('./voice.js').then(v => v.startDMCallAudio(from));
