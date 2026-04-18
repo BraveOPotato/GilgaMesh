@@ -228,7 +228,7 @@ export function renderRoomGrid() {
     const card = document.createElement('div');
     card.style.cssText = 'background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--radius);padding:14px;cursor:pointer;position:relative;transition:border-color .15s;';
     card.onmouseenter = () => card.style.borderColor = 'var(--border-accent)';
-    card.onmouseleave = () => card.style.borderColor = '';
+    card.onmouseleave = () => card.style.borderColor = 'transparent';
     card.onclick = () => window._gmSwitchRoom(rid);
     card.innerHTML = `
       <div style="width:40px;height:40px;border-radius:10px;background:${color}22;border:1px solid ${color}44;color:${color};display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;margin-bottom:10px">${(r.name||'R').charAt(0).toUpperCase()}</div>

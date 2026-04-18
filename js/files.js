@@ -55,19 +55,35 @@ function prepareFileShare(file) {
   // ── DM context ───────────────────────────────────────────────────────────
   if (state.activeDMPeer && !state.activeRoomId) {
     const peerId = state.activeDMPeer;
-    const dmMsg = {
-      type: 'dm_message', id: genId(),
-      from: state.myId, fromName: state.myName,
-      content: null, ts: Date.now(), msgType: 'file',
+    const msgId  = genId();
+    // Local stored format matches what renderMessage expects
+    const localMsg = {
+      id: msgId, type: 'chat',
+      author: state.myName, authorId: state.myId,
+      content: null, ts: Date.now(), channel: 'dm',
+      msgType: 'file',
       fileShare: { token, fromId: state.myId, fromName: state.myName, filename: file.name, size: file.size, expires },
     };
-    // Store locally
+    if (!state.dms) state.dms = {};
     if (!state.dms[peerId]) state.dms[peerId] = [];
-    state.dms[peerId].push(dmMsg);
-    import('./friends.js').then(f => { f.saveFriendsData?.(); f.renderDMThreadContent?.(peerId); });
-    // Send to peer if connected
-    const conn = state.peerConns[peerId]?.conn;
-    if (conn?.open) try { conn.send(dmMsg); } catch {}
+    state.dms[peerId].push(localMsg);
+    import('./friends.js').then(f => {
+      f.saveFriendsData?.();
+      if (state.activeDMPeer === peerId) { import('./ui.js').then(ui => { ui.renderMessage(localMsg); ui.scrollToBottom(); }); }
+    });
+    // Wire packet — uses type:'dm' so the receiver's handleIncomingDM fires.
+    // Include msgType + fileShare so the receiver reconstructs the file card.
+    const wireMsg = {
+      type: 'dm', id: msgId,
+      from: state.myId, fromName: state.myName,
+      content: null, ts: localMsg.ts,
+      msgType: 'file',
+      fileShare: localMsg.fileShare,
+    };
+    const ex = state.peerConns[peerId];
+    const send = conn => { try { conn.send(wireMsg); } catch { toast('Send failed', 'error'); } };
+    if (ex?.conn?.open) send(ex.conn);
+    else state.cb.connectTo?.(peerId, send, () => toast('Peer unreachable', 'error'));
     return;
   }
 

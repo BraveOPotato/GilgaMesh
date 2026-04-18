@@ -288,6 +288,9 @@ export function handleIncomingDM(data, conn) {
     content:  data.content,
     ts:       data.ts || Date.now(),
     channel:  'dm',
+    // Preserve file-share fields when present
+    ...(data.msgType   ? { msgType:   data.msgType   } : {}),
+    ...(data.fileShare ? { fileShare: data.fileShare } : {}),
   };
 
   state.dms[from].push(msg);
@@ -413,7 +416,7 @@ export function renderFriendsSidebar() {
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') window._gmOpenDMById(); });
     // focus so typing is snappy on mobile too
     inp.addEventListener('focus', () => inp.style.borderColor = 'var(--border-accent)');
-    inp.addEventListener('blur',  () => inp.style.borderColor = '');
+    inp.addEventListener('blur',  () => inp.style.borderColor = 'transparent');
   }
 }
 
@@ -471,7 +474,7 @@ export function renderFriendsGrid() {
     const card = document.createElement('div');
     card.style.cssText = 'background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--radius);padding:14px;cursor:pointer;position:relative;transition:border-color .15s;';
     card.onmouseenter = () => card.style.borderColor = 'var(--border-accent)';
-    card.onmouseleave = () => card.style.borderColor = '';
+    card.onmouseleave = () => card.style.borderColor = 'transparent';
     card.onclick = () => window._gmShowPeerProfile(pid, name);
     // Avatar is desaturated + dimmed until the peer has an open connection
     const avatarFilter = online ? '' : 'filter:grayscale(1);opacity:0.45;';
@@ -715,15 +718,11 @@ export function renderFriendsBadge() {
 // ─── PEER PROFILE POPUP ───────────────────────────────────────────────────────
 export function showPeerProfile(peerId, name) {
   if (!peerId || peerId === state.myId) return;
-  // originalName = the "real" name stored on the friend record (before nickname)
-  const originalName = state.friends?.[peerId]?.name || name || peerId;
-  const nickname     = state.friends?.[peerId]?.nickname || '';
-  // Display name: nickname if set, otherwise original
-  const displayName  = nickname || originalName;
+  const peerName = name || state.friends?.[peerId]?.name || peerId;
   const fri   = isFriend(peerId);
   const blk   = isBlocked(peerId);
   const color = stringToColor(peerId);
-  const safeN = displayName.replace(/'/g, "\\'");
+  const safeN = peerName.replace(/'/g, "\\'");
 
   let el = document.getElementById('peer-profile-popup');
   if (!el) {
@@ -733,18 +732,13 @@ export function showPeerProfile(peerId, name) {
     document.body.appendChild(el);
   }
 
-  // Show "aka <originalName>" only when a nickname is set AND it differs from the original name
-  const akaLine = (fri && nickname && nickname !== originalName)
-    ? `<div style="font-size:11px;color:var(--accent);font-family:var(--mono)">aka ${escapeHtml(originalName)}</div>`
-    : '';
-
   el.innerHTML = `<div class="modal" style="max-width:300px;padding:20px;position:relative" onclick="event.stopPropagation()">
     <button onclick="window._gmClosePeerProfile()" style="position:absolute;top:12px;right:12px;background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:16px;padding:3px 7px;border-radius:4px">✕</button>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">
-      <div style="width:48px;height:48px;border-radius:50%;background:${color}22;border:2px solid ${color}55;color:${color};display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;flex-shrink:0">${(displayName||'?').charAt(0).toUpperCase()}</div>
+      <div style="width:48px;height:48px;border-radius:50%;background:${color}22;border:2px solid ${color}55;color:${color};display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;flex-shrink:0">${(peerName||'?').charAt(0).toUpperCase()}</div>
       <div style="min-width:0">
-        <div style="font-size:15px;font-weight:700">${escapeHtml(displayName)}</div>
-        ${akaLine}
+        <div style="font-size:15px;font-weight:700">${escapeHtml(peerName)}</div>
+        ${fri && state.friends[peerId]?.nickname ? `<div style="font-size:11px;color:var(--accent);font-family:var(--mono)">aka ${escapeHtml(state.friends[peerId].name)}</div>` : ''}
         <div style="font-size:10px;font-family:var(--mono);color:var(--text-muted);overflow:hidden;text-overflow:ellipsis">${escapeHtml(peerId)}</div>
       </div>
     </div>
