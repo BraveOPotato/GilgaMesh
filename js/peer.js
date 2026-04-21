@@ -98,13 +98,20 @@ export function setupChatConn(conn) {
 
   conn.on('data',  data => state.cb.handleChatData?.(data, conn));
   conn.on('close', () => {
-    // Only trigger disconnect if this conn is still the active one.
-    // A replaced/deduped conn closing must not tear down the new conn.
     if (state.peerConns[pid]?.conn === conn) state.cb.handlePeerDisconnect?.(pid);
   });
   conn.on('error', () => {
     if (state.peerConns[pid]?.conn === conn) state.cb.handlePeerDisconnect?.(pid);
   });
+
+  // If this peer is a friend, send the shared secret we have for them
+  // so they can verify our identity (even if our peer ID has changed)
+  const friendRecord = state.friends?.[pid];
+  if (friendRecord?.sharedSecret) {
+    try {
+      conn.send({ type: 'verify_token', token: friendRecord.sharedSecret, id: state.myId, name: state.myName });
+    } catch {}
+  }
 }
 
 // ─── CONNECT TO A PEER ───────────────────────────────────────────────────────

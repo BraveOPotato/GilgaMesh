@@ -6,9 +6,9 @@ export function loadStorage() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
     const d = JSON.parse(raw);
-    state.myName      = d.name    || '';
-    state.myId        = d.id      || null;
-    state.peerAliases = d.aliases || {};
+    state.myName        = d.name    || '';
+    state.myId          = d.id      || null;
+    state.peerAliases   = d.aliases || {};
     const stored = d.rooms || {};
     for (const [rid, r] of Object.entries(stored)) {
       state.rooms[rid] = makeRoomShell(r.id, r.name, r.createdBy);

@@ -30,6 +30,7 @@ import {
   sendDM, sendDMTyping, handleIncomingDM,
   handleIncomingFriendRequest, handleIncomingFriendResponse,
   respondToFriendRequest,
+  handleVerifyToken,
   startDMCall, handleDMCallInvite, handleDMCallAccept, handleDMCallEnd, openDMCallView,
   openFriendsView, closeFriendsView,
   renderFriendsSidebar, renderFriendsGrid, renderFriendsBadge,
@@ -149,6 +150,11 @@ export function handleChatData(data, conn) {
   if (state.peerConns[pid]) state.peerConns[pid].lastSeen = Date.now();
 
   switch (data.type) {
+
+    // ── Identity verification ──────────────────────────────────────────────
+    case 'verify_token':
+      handleVerifyToken(data, conn);
+      break;
 
     // ── Heartbeat ──────────────────────────────────────────────────────────
     case 'ping':
