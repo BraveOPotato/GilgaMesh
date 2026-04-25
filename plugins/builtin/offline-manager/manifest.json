@@ -1,0 +1,23 @@
+{
+  "id": "offline-manager",
+  "name": "Offline Manager",
+  "version": "1.0.0",
+  "description": "Queues DMs sent to offline peers on a relay server and delivers them when the peer comes back online. Also sends push notifications.",
+  "author": "GilgaMesh Core",
+  "scope": "personal",
+  "visibility": "public",
+  "category": "quality-of-life",
+  "icon": "📬",
+  "permissions": [
+    "network",
+    "notifications",
+    "dm:read",
+    "dm:write",
+    "storage:read",
+    "storage:write"
+  ],
+  "config": {
+    "relayUrl": "https://your-relay-server.example.com"
+  },
+  "entry": "index.js"
+}

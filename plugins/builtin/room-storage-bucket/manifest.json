@@ -1,0 +1,21 @@
+{
+  "id": "room-storage-bucket",
+  "name": "Room Storage Bucket",
+  "version": "1.0.0",
+  "description": "Relays all room messages to an external server so peers who were offline can catch up on missed messages when they reconnect.",
+  "author": "GilgaMesh Core",
+  "scope": "rooms",
+  "visibility": "public",
+  "category": "storage",
+  "icon": "🪣",
+  "permissions": [
+    "network",
+    "room:read",
+    "storage:read",
+    "storage:write"
+  ],
+  "config": {
+    "storageUrl": "https://your-storage-server.example.com"
+  },
+  "entry": "index.js"
+}

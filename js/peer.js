@@ -51,6 +51,10 @@ function onPeerOpen(id) {
 
   if (window.backToRooms) window.backToRooms();
   import('./mesh.js').then(m => { for (const rid of Object.keys(state.rooms)) m.attemptRoomReconnect(rid); });
+
+  // Boot the plugin system now that myId is stable.
+  // main.js registers state.cb.onPeerOpen; peer.js fires it here.
+  state.cb.onPeerOpen?.(id);
 }
 
 // ─── INCOMING CHAT CONNECTION ─────────────────────────────────────────────────

@@ -1,0 +1,20 @@
+{
+  "id": "music-player",
+  "name": "Music Player",
+  "version": "1.0.0",
+  "description": "Lets any room member queue and play music during voice calls. Everyone in the voice channel hears the same stream in sync.",
+  "author": "GilgaMesh Community",
+  "scope": "rooms",
+  "visibility": "public",
+  "category": "entertainment",
+  "icon": "🎵",
+  "permissions": [
+    "network",
+    "voice",
+    "room:write",
+    "ui:inject",
+    "storage:read",
+    "storage:write"
+  ],
+  "entry": "index.js"
+}

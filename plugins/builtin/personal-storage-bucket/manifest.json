@@ -1,0 +1,21 @@
+{
+  "id": "personal-storage-bucket",
+  "name": "Personal Storage Bucket",
+  "version": "1.0.0",
+  "description": "Backs up your DM history to a private encrypted storage bucket. Only you can decrypt and access your messages.",
+  "author": "GilgaMesh Core",
+  "scope": "personal",
+  "visibility": "private",
+  "category": "storage",
+  "icon": "🔐",
+  "permissions": [
+    "network",
+    "dm:read",
+    "storage:read",
+    "storage:write"
+  ],
+  "config": {
+    "bucketUrl": "https://your-private-bucket.example.com"
+  },
+  "entry": "index.js"
+}

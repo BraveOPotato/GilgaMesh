@@ -1,0 +1,22 @@
+{
+  "id": "discount-bot",
+  "name": "Discount Bot",
+  "version": "1.0.0",
+  "description": "Automatically fetches and posts discount codes and deals to configured rooms on a schedule. Operators configure which rooms receive deal alerts.",
+  "author": "GilgaMesh Community",
+  "scope": "rooms",
+  "visibility": "public",
+  "category": "automation",
+  "icon": "🏷️",
+  "permissions": [
+    "network",
+    "room:write",
+    "storage:read",
+    "storage:write"
+  ],
+  "config": {
+    "feedUrl": "https://your-deals-api.example.com/deals",
+    "intervalMinutes": 60
+  },
+  "entry": "index.js"
+}
