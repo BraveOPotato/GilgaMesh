@@ -625,7 +625,7 @@ export function openDMWith(peerId, name) {
   document.getElementById('active-channel-desc').textContent  = `Direct message · ${peerId}`;
   document.getElementById('back-to-rooms').style.display      = 'none';
   document.getElementById('invite-btn').style.display         = 'none';
-  document.getElementById('leave-strip').style.display        = 'none';
+  document.getElementById('room-settings-strip').style.display        = 'none';
 
   const blocked = isBlocked(peerId);
   document.getElementById('msg-input').disabled               = blocked;
