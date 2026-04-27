@@ -425,7 +425,7 @@ export function openFriendsView() {
   document.getElementById('active-channel-desc').textContent  = 'Message your friends directly';
   document.getElementById('back-to-rooms').style.display      = 'none';
   document.getElementById('invite-btn').style.display         = 'none';
-  document.getElementById('leave-strip').style.display        = 'none';
+  document.getElementById('room-settings-strip').style.display  = 'none';
   document.getElementById('msg-input').disabled               = true;
   document.getElementById('msg-input').placeholder            = 'Select a friend to chat';
   document.getElementById('send-btn').disabled                = true;

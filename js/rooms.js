@@ -210,7 +210,7 @@ export function switchRoom(rid) {
   document.getElementById('file-btn').disabled     = false;
   document.getElementById('back-to-rooms').style.display = 'flex';
   document.getElementById('invite-btn').style.display    = 'flex';
-  document.getElementById('leave-strip').style.display   = 'block';
+  document.getElementById('room-settings-strip').style.display = 'block';
 
   renderRoomSidebar(); renderAllMessages(); scrollToBottom();
   updateNetworkPanel(); renderRoomList();
@@ -234,7 +234,7 @@ export function backToRooms() {
   document.getElementById('active-channel-desc').textContent  = 'Your peer-to-peer rooms';
   document.getElementById('back-to-rooms').style.display = 'none';
   document.getElementById('invite-btn').style.display    = 'none';
-  document.getElementById('leave-strip').style.display   = 'none';
+  document.getElementById('room-settings-strip').style.display = 'none';
   document.getElementById('msg-input').disabled    = true;
   document.getElementById('msg-input').placeholder = 'Select a room to chat';
   document.getElementById('send-btn').disabled  = true;

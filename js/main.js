@@ -580,6 +580,15 @@ function showSettings() {
   document.getElementById('settings-modal').classList.remove('hidden');
 }
 
+function showRoomSettings() {
+  const r = state.activeRoomId ? state.rooms[state.activeRoomId] : null;
+  const titleEl = document.getElementById('room-settings-modal-title');
+  const subEl   = document.getElementById('room-settings-modal-sub');
+  if (titleEl) titleEl.textContent = r ? r.name : 'Room Settings';
+  if (subEl)   subEl.textContent   = r ? `Room ID: ${r.id}` : '';
+  document.getElementById('room-settings-modal').classList.remove('hidden');
+}
+
 function clearData() {
   if (confirm('Erase ALL local data — rooms, messages, identity, friends, DMs? This cannot be undone.')) {
     clearAllData();
@@ -683,6 +692,7 @@ Object.assign(window, {
   closeModal,
   completeSetup,
   showSettings, saveSettings,
+  showRoomSettings,
   showCreateRoom, createRoom,
   showAddChannel, createChannel,
   showInvite, copyInviteLink,
@@ -830,6 +840,12 @@ Object.assign(window, {
   },
 
   // ── Plugin hot-swap (set after pluginHost boots, but exposed here for discoverability)
+  _gmOpenRoomPlugins: () => {
+    import('./plugin-ui.js').then(ui => {
+      closeModal('room-settings-modal');
+      ui.openRoomPluginsModal?.();
+    });
+  },
   _gmInstallPlugin: (...args) => installPlugin(...args),
   _gmRemovePlugin:  (...args) => removePlugin(...args),
   _gmTogglePlugin:  (...args) => togglePlugin(...args),

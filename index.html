@@ -80,11 +80,38 @@ html.light .drawer-overlay { background:rgba(0,0,0,0.3); }
 .dot.searching { background:var(--accent); animation:pulse-dot 1.2s ease-in-out infinite; }
 @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.8)} }
 
-#leave-strip { display:none; padding:6px 10px; border-bottom:1px solid var(--border); flex-shrink:0; }
-#leave-room-btn { width:100%; background:none; border:1px solid var(--border); cursor:pointer; color:var(--text-muted); font-size:12px; font-family:var(--font); padding:5px 10px; border-radius:var(--radius-sm); text-align:left; line-height:1.4; display:flex; align-items:center; gap:6px; }
-#leave-room-btn:hover { color:var(--red); border-color:rgba(255,77,106,.35); background:var(--red-dim); }
 
 #channels-section { flex:1; overflow-y:auto; padding:6px 0; position:relative; }
+
+/* ── Room settings strip ── */
+#room-settings-strip { display:none; padding:6px 10px; border-bottom:1px solid var(--border); flex-shrink:0; }
+#room-settings-btn {
+  width:100%; background:none; border:1px solid var(--border);
+  cursor:pointer; color:var(--text-muted); font-size:12px;
+  font-family:var(--font); padding:6px 10px;
+  border-radius:var(--radius-sm); text-align:left;
+  display:flex; align-items:center; gap:6px;
+  transition:color .15s, border-color .15s, background .15s;
+}
+#room-settings-btn:hover { border-color:var(--border-accent); color:var(--text-primary); background:var(--bg-hover); }
+
+/* ── Room settings modal action list ── */
+.room-settings-actions { display:flex; flex-direction:column; gap:8px; margin-top:2px; }
+.room-action-btn {
+  width:100%; background:var(--bg-raised);
+  border:1px solid var(--border); border-radius:var(--radius);
+  cursor:pointer; font-family:var(--font); font-size:13px;
+  padding:11px 14px; text-align:left;
+  display:flex; align-items:center; gap:12px;
+  color:var(--text-primary);
+  transition:background .15s, border-color .15s, color .15s;
+}
+.room-action-btn:hover        { background:var(--bg-hover); border-color:var(--border-accent); }
+.room-action-btn.danger:hover { background:var(--red-dim); border-color:rgba(255,77,106,.35); color:var(--red); }
+.room-action-btn .ra-icon  { font-size:18px; flex-shrink:0; width:24px; text-align:center; }
+.room-action-btn .ra-text  { display:flex; flex-direction:column; gap:2px; }
+.room-action-btn .ra-label { font-weight:500; font-size:13px; line-height:1.2; }
+.room-action-btn .ra-sub   { font-size:11px; color:var(--text-muted); font-weight:400; }
 .section-label { padding:9px 13px 4px; font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); display:flex; align-items:center; justify-content:space-between; }
 .section-label button { background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:14px; line-height:1; padding:1px 3px; border-radius:4px; }
 .section-label button:hover { color:var(--text-primary); background:var(--bg-hover); }
@@ -433,8 +460,8 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
       <div class="dot" id="status-dot" title="Network status"></div>
     </div>
 
-    <div id="leave-strip">
-      <button id="leave-room-btn" onclick="confirmLeaveRoom()">⬡ Leave Room</button>
+    <div id="room-settings-strip">
+      <button id="room-settings-btn" onclick="showRoomSettings()">⚙ Room Settings</button>
     </div>
     <span id="status-text" style="display:none"></span>
 
@@ -648,6 +675,39 @@ html.light .modal-overlay { background:rgba(0,0,0,0.35); }
     <div class="btn-row">
       <button class="btn btn-secondary" onclick="closeModal('leave-room-modal')">Cancel</button>
       <button class="btn" style="background:var(--red);color:#fff" onclick="leaveRoom()">Leave Room</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="room-settings-modal">
+  <div class="modal" style="max-width:380px">
+    <h2 id="room-settings-modal-title">Room Settings</h2>
+    <p id="room-settings-modal-sub" style="color:var(--text-muted);font-size:13px;margin-bottom:14px"></p>
+    <div class="room-settings-actions">
+      <button class="room-action-btn" onclick="window._gmOpenRoomPlugins()">
+        <span class="ra-icon">🧩</span>
+        <span class="ra-text">
+          <span class="ra-label">Room Plugins</span>
+          <span class="ra-sub">Manage plugins active in this room</span>
+        </span>
+      </button>
+      <button class="room-action-btn" onclick="showInvite(); closeModal('room-settings-modal')">
+        <span class="ra-icon">🔗</span>
+        <span class="ra-text">
+          <span class="ra-label">Invite Members</span>
+          <span class="ra-sub">Share an invite link</span>
+        </span>
+      </button>
+      <button class="room-action-btn danger" onclick="closeModal('room-settings-modal'); confirmLeaveRoom()">
+        <span class="ra-icon">⬡</span>
+        <span class="ra-text">
+          <span class="ra-label">Leave Room</span>
+          <span class="ra-sub">Remove yourself from this room</span>
+        </span>
+      </button>
+    </div>
+    <div class="btn-row" style="margin-top:14px">
+      <button class="btn btn-secondary" onclick="closeModal('room-settings-modal')">Close</button>
     </div>
   </div>
 </div>
