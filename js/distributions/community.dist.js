@@ -13,5 +13,6 @@ export default {
     { id: 'room-storage-bucket',   removable: false },
     { id: 'music-player',          removable: true  },
     { id: 'discount-bot',          removable: true  },
+    { id: 'test-bot',              removable: true  },
   ],
 };

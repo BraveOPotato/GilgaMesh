@@ -26,6 +26,10 @@ export const state = {
   // Mention autocomplete
   mentionState: { active: false, start: -1, query: '', selected: 0, matches: [] },
 
+  // Slash command autocomplete
+  slashState:   { active: false, start: -1, query: '', selected: 0, matches: [] },
+  _botCommands: [],  // populated by ui.updateBotCommandList()
+
   // Active reply target: { id, author, content } or null
   replyingTo:   null,
 

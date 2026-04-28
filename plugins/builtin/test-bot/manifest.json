@@ -1,0 +1,16 @@
+{
+  "id": "test-bot",
+  "name": "Test Bot",
+  "version": "1.0.0",
+  "description": "Scaffold bot that responds with 'Got called!' to confirm the bot system works.",
+  "author": "GilgaMesh",
+  "scope": "rooms",
+  "visibility": "public",
+  "category": "developer",
+  "icon": "🤖",
+  "entry": "index.js",
+  "permissions": [
+    "bot:command",
+    "room:write"
+  ]
+}

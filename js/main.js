@@ -46,6 +46,7 @@ import {
   toggleSidebar, closeSidebar, openNetPanel, closeNetPanel,
   handleMentionInput, moveMentionSelection, confirmMention, closeMentionPopup,
   renderMentionText,
+  handleSlashInput, moveSlashSelection, confirmSlash, closeSlashPopup, updateBotCommandList,
   openCallView, closeCallView, openDMCallViewUI, closeDMCallView, expandCallTile, fullscreenTile,
   setReplyTarget, clearReplyTarget, scrollToMessage,
 } from './ui.js';
@@ -107,6 +108,38 @@ function init() {
     }
   };
 
+  // Bot respond callback — called when a plugin calls GilgaMesh.api.bot.respond()
+  state.cb.botRespond = async ({ pluginId, content, context }) => {
+    const { genId } = await import('./ids.js');
+    // Resolve bot display name from manifest
+    const botName = pluginHost?.getPlugin(pluginId)?.manifest?.name || pluginId;
+    if (context?.dmPeerId) {
+      // DM context — show locally only (bot is local; not sent over wire)
+      const msg = {
+        id: genId(), type: 'chat',
+        author: botName, authorId: 'bot:' + pluginId,
+        content, ts: Date.now(), channel: 'dm', msgType: 'text',
+      };
+      const { renderMessage, scrollToBottom } = await import('./ui.js');
+      if (state.activeDMPeer === context.dmPeerId) { renderMessage(msg); scrollToBottom(); }
+    } else if (context?.roomId) {
+      const rid = context.roomId, ch = context.channel || 'general';
+      const r = state.rooms[rid]; if (!r) return;
+      const msg = {
+        type: 'message', roomId: rid, id: genId(),
+        author: botName, authorId: 'bot:' + pluginId,
+        content, channel: ch, ts: Date.now(), originId: state.myId,
+      };
+      displayMessage(rid, msg);
+      // Propagate bot response through tree
+      if (r.parentConn?.open) try { r.parentConn.send({ type: 'relay_message', roomId: rid, payload: msg }); } catch {}
+      for (const cid of r.childIds) {
+        const conn = r.childConns[cid] || state.peerConns[cid]?.conn;
+        if (conn?.open) try { conn.send({ type: 'relay_message', roomId: rid, payload: msg }); } catch {}
+      }
+    }
+  };
+
   setupUI();
 
   if (!state.myName) {
@@ -147,6 +180,14 @@ state.cb.onPeerOpen = async (id) => {
   pluginHost = new PluginHost(distConfig, state);
   await pluginHost.init();
 
+  // Re-sync slash autocomplete whenever a plugin registers a new /command.
+  // Plugins register asynchronously after init(), so the initial refreshBotCommands()
+  // call below would miss commands registered during plugin boot.
+  pluginHost.onBotRegistered = refreshBotCommands;
+
+  // Push initial bot command list to the UI autocomplete
+  refreshBotCommands();
+
   // Patch the settings modal with the plugins tab (idempotent)
   initPluginSettingsTab(pluginHost);
 
@@ -155,6 +196,18 @@ state.cb.onPeerOpen = async (id) => {
   window._gmRemovePlugin  = removePlugin;
   window._gmTogglePlugin  = togglePlugin;
 };
+
+// ─── BOT COMMAND REFRESH ─────────────────────────────────────────────────────
+/** Re-syncs the slash-autocomplete list with pluginHost's bot registry. */
+function refreshBotCommands() {
+  if (!pluginHost) return;
+  setTimeout(() => {
+    const context = state.activeDMPeer ? 'dm' : 'room';
+    const cmds = pluginHost.getBotCommands(context);
+    console.log('[botCommands] refresh context=', context, 'cmds=', cmds, 'activeDMPeer=', state.activeDMPeer);
+    updateBotCommandList(cmds);
+  }, 0);
+}
 
 // ─── HOT-SWAP: INSTALL ────────────────────────────────────────────────────────
 /**
@@ -286,9 +339,16 @@ function setupUI() {
     if (state.activeDMPeer) sendDMTyping(state.activeDMPeer);
     else onTyping();
     handleMentionInput(input);
+    handleSlashInput(input);
   });
 
   input.addEventListener('keydown', e => {
+    if (state.slashState?.active) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveSlashSelection(1);  return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); moveSlashSelection(-1); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); confirmSlash(); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); closeSlashPopup(); return; }
+    }
     if (state.mentionState.active) {
       if (e.key === 'ArrowDown') { e.preventDefault(); moveMentionSelection(1);  return; }
       if (e.key === 'ArrowUp')   { e.preventDefault(); moveMentionSelection(-1); return; }
@@ -317,13 +377,46 @@ function sendMessageFromUI() {
     const input = document.getElementById('msg-input');
     const text  = input.value.trim();
     if (!text) return;
+    // Check for bot command in DM context
+    if (text.startsWith('/') && tryDispatchBotCommand(text, 'dm')) {
+      input.value = ''; input.style.height = '';
+      document.getElementById('send-btn').disabled = true;
+      return;
+    }
     input.value = '';
     input.style.height = '';
     document.getElementById('send-btn').disabled = true;
     sendDM(state.activeDMPeer, text);
     return;
   }
+  // Check for bot command in room context
+  const input = document.getElementById('msg-input');
+  const text  = input.value.trim();
+  if (text.startsWith('/') && tryDispatchBotCommand(text, 'room')) {
+    input.value = ''; input.style.height = '';
+    document.getElementById('send-btn').disabled = true;
+    return;
+  }
   import('./messaging.js').then(m => m.sendMessage());
+}
+
+/** Returns true if the text was a recognised bot command and was dispatched. */
+function tryDispatchBotCommand(text, contextType) {
+  if (!pluginHost) return false;
+  // Parse: /commandName [args...]
+  const withoutSlash = text.slice(1).replace('\u00a0', ' ');
+  const spaceIdx = withoutSlash.search(/[\s\u00a0]/);
+  const command  = spaceIdx === -1 ? withoutSlash : withoutSlash.slice(0, spaceIdx);
+  const args     = spaceIdx === -1 ? '' : withoutSlash.slice(spaceIdx + 1).trim();
+  const ctx = contextType === 'dm'
+    ? { dmPeerId: state.activeDMPeer, authorId: state.myId, authorName: state.myName }
+    : { roomId: state.activeRoomId, channel: state.activeChannel, authorId: state.myId, authorName: state.myName };
+  const dispatched = pluginHost.dispatchBotCommand(command.toLowerCase(), args, ctx);
+  if (dispatched) {
+    // Post the user's command as a normal message so everyone sees it
+    import('./messaging.js').then(m => m.sendMessage());
+  }
+  return dispatched;
 }
 
 // ─── CENTRAL MESSAGE DISPATCHER ───────────────────────────────────────────────
@@ -686,8 +779,8 @@ state.cb.onRoomJoined = (rid) => {
 Object.assign(window, {
   toggleTheme,
   toggleSidebar, closeSidebar, openNetPanel, closeNetPanel,
-  backToRooms,
-  _gmSwitchRoom:    id => switchRoom(id),
+  backToRooms:      (...a) => { backToRooms(...a);       refreshBotCommands(); },
+  _gmSwitchRoom:    id    => { switchRoom(id);           refreshBotCommands(); },
   _gmSwitchChannel: id => switchChannel(id),
   closeModal,
   completeSetup,
@@ -736,13 +829,13 @@ Object.assign(window, {
 
   // ── Friends / DM ──────────────────────────────────────────────────────────
   _gmOpenFriends:    () => openFriendsView(),
-  _gmOpenDM:         (pid, name) => openDMWith(pid, name),
+  _gmOpenDM:         (pid, name) => { openDMWith(pid, name); refreshBotCommands(); },
   _gmOpenDMById:     () => {
     const el = document.getElementById('dm-peer-id-input');
     const pid = el?.value.trim();
     if (!pid) { toast('Enter a Peer ID', 'error'); return; }
     if (el) el.value = '';
-    openDMWith(pid);
+    openDMWith(pid); refreshBotCommands();
   },
   _gmAddFriend:    (pid, name) => addFriend(pid, name),
   _gmRemoveFriend: (pid) => removeFriend(pid),
@@ -837,6 +930,11 @@ Object.assign(window, {
   _gmSelectMention: idx => {
     state.mentionState.selected = idx;
     confirmMention();
+  },
+  _gmSelectSlash: idx => {
+    if (!state.slashState) return;
+    state.slashState.selected = idx;
+    confirmSlash();
   },
 
   // ── Plugin hot-swap (set after pluginHost boots, but exposed here for discoverability)

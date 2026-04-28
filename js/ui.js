@@ -1187,3 +1187,77 @@ export function renderMentionText(text) {
     `<span class="mention${name.toLowerCase() === state.myName.toLowerCase() ? ' mention-me' : ''}">${match}</span>`
   );
 }
+
+// ─── /SLASH COMMAND AUTOCOMPLETE ──────────────────────────────────────────────
+// Mirrors the @mention system for bot /commands.
+// main.js calls updateBotCommandList() whenever pluginHost's registry changes.
+
+export function updateBotCommandList(commands) {
+  state._botCommands = commands || [];
+}
+
+export function handleSlashInput(input) {
+  const val = input.value, cur = input.selectionStart;
+  let slashPos = -1;
+  for (let i = cur - 1; i >= 0; i--) {
+    if (val[i] === '/') { slashPos = i; break; }
+    if (/[\s\n]/.test(val[i])) break;
+  }
+  if (slashPos === -1 || slashPos !== 0) { closeSlashPopup(); return; }
+  const query = val.slice(slashPos + 1, cur).toLowerCase();
+  const context = state.activeDMPeer ? 'dm' : 'room';
+  const cmds  = (state._botCommands || []).filter(c => c.command.startsWith(query));
+  console.log('[slashInput] val=', val, 'query=', query, 'context=', context, '_botCommands=', state._botCommands, 'filtered=', cmds);
+  if (!cmds.length) { closeSlashPopup(); return; }
+  state.slashState = { active: true, start: slashPos, query, selected: 0, matches: cmds };
+  _showSlashPopup(cmds);
+}
+
+function _showSlashPopup(matches) {
+  let popup = document.getElementById('slash-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'slash-popup';
+    popup.className = 'mention-popup slash-popup';
+    document.getElementById('input-area').appendChild(popup);
+  }
+  const ss = state.slashState;
+  ss.matches  = matches;
+  ss.selected = Math.min(ss.selected || 0, matches.length - 1);
+  popup.innerHTML = matches.map((c, i) =>
+    `<div class="mention-item slash-item${i === ss.selected ? ' selected' : ''}" data-idx="${i}"
+      onmousedown="window._gmSelectSlash(${i})">
+      <div class="mention-avatar" style="background:var(--accent-subtle,#2a2d4a);color:var(--accent,#5b6cf9);">${escapeHtml(c.icon || '🤖')}</div>
+      <span class="mention-name">/${escapeHtml(c.command)}</span>
+      <span class="slash-desc" style="opacity:.6;font-size:.85em;margin-left:.5em;">${escapeHtml(c.description || '')}</span>
+    </div>`
+  ).join('');
+  popup.style.display = 'block';
+}
+
+export function moveSlashSelection(dir) {
+  const ss = state.slashState;
+  if (!ss?.active || !ss.matches?.length) return;
+  ss.selected = (ss.selected + dir + ss.matches.length) % ss.matches.length;
+  _showSlashPopup(ss.matches);
+}
+
+export function confirmSlash() {
+  const ss = state.slashState;
+  if (!ss?.active || !ss.matches?.length) return;
+  const c = ss.matches[ss.selected]; if (!c) return;
+  const input = document.getElementById('msg-input');
+  const after = input.value.slice(ss.start + 1 + ss.query.length).trimStart();
+  input.value = '/' + c.command + '\u00a0' + after;
+  const newPos = c.command.length + 2;
+  input.setSelectionRange(newPos, newPos);
+  input.focus();
+  closeSlashPopup();
+  document.getElementById('send-btn').disabled = !input.value.trim() || (!state.activeRoomId && !state.activeDMPeer);
+}
+
+export function closeSlashPopup() {
+  if (state.slashState) state.slashState.active = false;
+  const popup = document.getElementById('slash-popup');
+  if (popup) popup.style.display = 'none';
+}

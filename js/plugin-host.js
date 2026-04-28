@@ -30,6 +30,7 @@ export const KNOWN_PERMISSIONS = new Set([
   'ui:inject',        // can add buttons/panels to the app chrome
   'storage:read',     // can read plugin's own isolated key-value store
   'storage:write',    // can write plugin's own isolated key-value store
+  'bot:command',      // registers a /slash command that appears in autocomplete
 ]);
 
 // ─── PLUGIN HOST CLASS ────────────────────────────────────────────────────────
@@ -50,6 +51,10 @@ export class PluginHost {
 
     // Handlers registered by the app for plugin→app API calls
     this._apiHandlers = new Map();
+
+    // Bot command registry: commandName → { pluginId, description, scope }
+    // scope: 'room' | 'dm' | 'both'
+    this._botCommands = new Map();
 
     // Bound so we can removeEventListener later
     this._onMessage  = this._onMessage.bind(this);
@@ -440,6 +445,30 @@ ${pluginSrc}
       this._injectPluginButton(pluginId, args);
       return { injected: true };
     });
+
+    // ── bot: register a slash command ─────────────────────────────────────
+    this._apiHandlers.set('bot.register', async ({ args, permissions, pluginId, entry }) => {
+      if (!permissions.has('bot:command')) throw new Error('Permission denied: bot:command');
+      const { command, description = '', icon = '🤖' } = args;
+      // Normalise scope: manifest uses 'rooms'/'dms', internals use 'room'/'dm'
+      const rawScope = args.scope || entry.manifest.scope || 'both';
+      const scope = rawScope === 'rooms' ? 'room' : rawScope === 'dms' ? 'dm' : rawScope;
+      if (!command || typeof command !== 'string') throw new Error('bot.register: command name required');
+      const cmd = command.toLowerCase().replace(/^\/+/, '');
+      this._botCommands.set(cmd, { pluginId, description, scope, icon });
+      console.log(`[PluginHost] Bot command "/${cmd}" registered by "${pluginId}" (scope: ${scope})`);
+      this.onBotRegistered?.();
+      return { registered: true, command: cmd };
+    });
+
+    // ── bot: send a response message back to the chat ──────────────────────
+    this._apiHandlers.set('bot.respond', async ({ args, permissions, pluginId }) => {
+      if (!permissions.has('bot:command')) throw new Error('Permission denied: bot:command');
+      if (!this.appState.cb.botRespond) throw new Error('botRespond callback not registered');
+      const { content, context } = args;
+      await this.appState.cb.botRespond({ pluginId, content, context });
+      return { sent: true };
+    });
   }
 
   // ─── UI INJECTION ─────────────────────────────────────────────────────────
@@ -458,6 +487,48 @@ ${pluginSrc}
       if (entry) this._send(entry.iframe, { dir: 'host→plugin', type: 'hook', event: eventName, payload: {} });
     };
     container.appendChild(btn);
+  }
+
+  // ─── BOT COMMAND REGISTRY ─────────────────────────────────────────────────
+
+  /**
+   * Returns bot commands available in the current context.
+   * @param {'room'|'dm'} context
+   * @param {string} [query]  prefix filter (without leading /)
+   */
+  getBotCommands(context = 'room', query = '') {
+    const results = [];
+    for (const [cmd, info] of this._botCommands) {
+      const scope = info.scope === 'rooms' ? 'room' : info.scope === 'dms' ? 'dm' : (info.scope || 'both');
+      if (scope !== 'both' && scope !== context) continue;
+      if (query && !cmd.startsWith(query.toLowerCase())) continue;
+      const entry = this._plugins.get(info.pluginId);
+      if (!entry?.enabled) continue;
+      results.push({ command: cmd, description: info.description, pluginId: info.pluginId, icon: info.icon || '🤖', scope });
+    }
+    return results;
+  }
+
+  /**
+   * Dispatch a /command to its owning plugin.
+   * @param {string} commandName  without leading /
+   * @param {string} args         everything after the command
+   * @param {object} ctx          { roomId?, channel?, dmPeerId?, authorId, authorName }
+   */
+  dispatchBotCommand(commandName, args, ctx) {
+    const info = this._botCommands.get(commandName.toLowerCase());
+    if (!info) return false;
+    const entry = this._plugins.get(info.pluginId);
+    if (!entry?.enabled) return false;
+    // Enforce scope: ctx.dmPeerId present → dm context, else room context
+    const context = ctx.dmPeerId ? 'dm' : 'room';
+    const scope = info.scope === 'rooms' ? 'room' : info.scope === 'dms' ? 'dm' : (info.scope || 'both');
+    if (scope !== 'both' && scope !== context) return false;
+    this._send(entry.iframe, {
+      dir: 'host→plugin', type: 'hook', event: 'bot:command',
+      payload: { command: commandName, args, context: ctx },
+    });
+    return true;
   }
 
   // ─── TEARDOWN ─────────────────────────────────────────────────────────────

@@ -161,6 +161,28 @@
          */
         addButton(opts) { return _call('ui.addButton', opts); },
       },
+
+      bot: {
+        /**
+         * Register a slash command. Requires 'bot:command'.
+         * @param {{ command, description, scope, icon }} opts
+         *   - command:     the slash command name without '/' (e.g. 'test')
+         *   - description: short description shown in autocomplete
+         *   - scope:       'room' | 'dm' | 'both' (default: 'both')
+         *   - icon:        emoji shown in autocomplete list
+         * After registering, listen for GilgaMesh.on('bot:command', cb)
+         * where cb receives { command, args, context }.
+         */
+        register(opts) { return _call('bot.register', opts); },
+
+        /**
+         * Send a bot response to the chat. Requires 'bot:command'.
+         * Call this from inside your 'bot:command' listener.
+         * @param {string} content  Message text to post as the bot
+         * @param {object} context  The same context object received in 'bot:command'
+         */
+        respond(content, context) { return _call('bot.respond', { content, context }); },
+      },
     },
   };
 
