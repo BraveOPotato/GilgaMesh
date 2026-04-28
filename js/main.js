@@ -742,7 +742,7 @@ Object.assign(window, {
     const pid = el?.value.trim();
     if (!pid) { toast('Enter a Peer ID', 'error'); return; }
     if (el) el.value = '';
-    openDMWith(pid, pid);
+    openDMWith(pid);
   },
   _gmAddFriend:    (pid, name) => addFriend(pid, name),
   _gmRemoveFriend: (pid) => removeFriend(pid),

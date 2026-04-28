@@ -398,6 +398,15 @@ export function handleIncomingDM(data, conn) {
   if (state.friends?.[from] && data.fromName) state.friends[from].name = data.fromName;
   saveFriendsData();
 
+  // If DM thread is open and we just learned the peer's real name,
+  // update header title/placeholder so the peer ID is replaced with their name.
+  if (state.activeDMPeer === from && data.fromName) {
+    const titleEl = document.getElementById('active-channel-title');
+    if (titleEl && titleEl.textContent === from) titleEl.textContent = data.fromName;
+    const inputEl = document.getElementById('msg-input');
+    if (inputEl && inputEl.placeholder === `Message ${from}…`) inputEl.placeholder = `Message ${data.fromName}…`;
+  }
+
   if (isBlocked(from)) return; // stored but never shown
 
   if (state.activeDMPeer === from) {
