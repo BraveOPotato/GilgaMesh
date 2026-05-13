@@ -1,0 +1,102 @@
+/* base.css — Design tokens and resets */
+
+:root {
+  /* Colours */
+  --bg:         #1a1b23;
+  --bg2:        #22232e;
+  --bg3:        #2a2b38;
+  --surface:    #2f3044;
+  --border:     #3a3b50;
+  --text:       #e4e5f0;
+  --text2:      #9a9bb0;
+  --accent:     #5b6cf9;
+  --accent2:    #4a5ae8;
+  --green:      #3ddc84;
+  --red:        #e06c75;
+  --yellow:     #f5a623;
+  --purple:     #c678dd;
+
+  /* Typography */
+  --font:       'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono:  'JetBrains Mono', 'Fira Code', monospace;
+  --text-xs:    11px;
+  --text-sm:    13px;
+  --text-base:  14px;
+  --text-md:    15px;
+  --text-lg:    16px;
+
+  /* Spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius:    8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Sidebar */
+  --sidebar-w: 240px;
+  --rail-w:    60px;
+
+  /* Transitions */
+  --transition: 150ms ease;
+}
+
+[data-theme="light"] {
+  --bg:      #f5f5f7;
+  --bg2:     #ffffff;
+  --bg3:     #ebebef;
+  --surface: #e4e4ea;
+  --border:  #d0d0da;
+  --text:    #1a1b23;
+  --text2:   #6b6c80;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  font-family:       var(--font);
+  font-size:         var(--text-base);
+  background-color:  var(--bg);
+  color:             var(--text);
+  line-height:       1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a    { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button {
+  font-family: var(--font);
+  font-size:   var(--text-sm);
+  cursor:      pointer;
+  border:      none;
+  background:  none;
+  color:       inherit;
+}
+
+input, textarea {
+  font-family: var(--font);
+  font-size:   var(--text-base);
+  background:  var(--bg3);
+  border:      1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color:       var(--text);
+  padding:     var(--sp-2) var(--sp-3);
+  outline:     none;
+}
+
+input:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow:   0 0 0 2px rgba(91,108,249,0.2);
+}
+
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }

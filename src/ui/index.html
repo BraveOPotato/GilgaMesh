@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d0f14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<title>GilgaMesh</title>
+
+<!-- External CSS (spec-compliant) -->
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/modals.css">
+<link rel="stylesheet" href="css/voice.css">
+<link rel="stylesheet" href="css/themes/dark.css">
+<link rel="stylesheet" href="css/themes/light.css">
+</head>
+<body>
+<div id="app">
+  <div id="sidebar-overlay"  class="drawer-overlay"></div>
+  <div id="netpanel-overlay" class="drawer-overlay"></div>
+
+  <!-- ═══ ROOM RAIL ═══ -->
+  <div id="room-rail">
+    <div id="rail-logo-wrap" data-friends-trigger title="Friends &amp; Direct Messages" style="position:relative;cursor:pointer;width:36px;height:36px;margin:4px 0 2px;flex-shrink:0">
+      <img id="rail-logo" src="img/logo.svg" alt="GilgaMesh" style="width:36px;height:36px;opacity:0.85;display:block">
+      <span id="friends-rail-badge" class="room-badge" style="display:none;position:absolute;top:-4px;right:-4px"></span>
+    </div>
+    <div class="rail-divider"></div>
+    <div id="room-list"></div>
+    <div class="rail-divider"></div>
+    <button id="add-room-btn" data-create-room title="Create room">+</button>
+  </div>
+
+  <!-- ═══ SIDEBAR ═══ -->
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <button id="back-to-rooms" data-back-to-rooms title="All rooms">←</button>
+      <div style="flex:1;min-width:0">
+        <div id="active-room-name">GilgaMesh</div>
+        <div id="active-room-id"></div>
+      </div>
+      <div class="dot" id="status-dot" title="Network status"></div>
+    </div>
+
+    <div id="room-settings-strip">
+      <button id="room-settings-btn" data-room-settings>⚙ Room Settings</button>
+    </div>
+    <span id="status-text" style="display:none"></span>
+
+    <div id="channels-section">
+      <div id="friends-sidebar-overlay" class="hidden" style="position:absolute;inset:0;background:var(--bg-deep);overflow-y:auto;z-index:1;padding:6px 0"></div>
+      <div class="section-label">Channels <button data-add-channel title="New channel">+</button></div>
+      <div id="channel-list"></div>
+      <div class="divider"></div>
+      <div class="section-label">Voice <button id="add-voice-btn" data-add-voice-channel title="New voice channel">+</button></div>
+      <div id="voice-channel-list"></div>
+      <div class="divider"></div>
+      <div class="section-label">Members</div>
+      <div id="peer-list"></div>
+    </div>
+
+    <div id="user-panel">
+      <div class="my-avatar" id="my-avatar">?</div>
+      <div class="my-info">
+        <div class="my-name" id="my-name-display">Loading…</div>
+        <div class="my-id"   id="my-id-display">—</div>
+      </div>
+      <button class="icon-btn" data-settings title="Settings">⚙</button>
+    </div>
+  </div>
+
+  <!-- ═══ MAIN ═══ -->
+  <div id="main">
+    <div id="chat-header">
+      <button id="menu-btn" data-toggle-sidebar title="Menu">☰</button>
+      <span style="font-size:15px;opacity:0.5;flex-shrink:0">#</span>
+      <span class="channel-title" id="active-channel-title">Rooms</span>
+      <span class="header-sep">|</span>
+      <span class="channel-desc"  id="active-channel-desc">Your peer-to-peer rooms</span>
+      <div id="header-right">
+        <div id="peer-count">
+          <div class="dot connected" style="width:8px;height:8px"></div>
+          <span id="peer-count-text"></span>
+        </div>
+        <button id="invite-btn" data-invite>+ Invite</button>
+        <button id="theme-toggle" data-theme-toggle title="Toggle theme">🌙</button>
+        <button id="topo-btn"    data-toggle-netpanel title="Network Topology">⬡</button>
+      </div>
+    </div>
+
+    <div id="messages"></div>
+
+    <div style="padding:0 14px 2px;min-height:20px;flex-shrink:0">
+      <div class="typing-indicator hidden" id="typing-indicator">
+        <div class="typing-dots"><span></span><span></span><span></span></div>
+        <span id="typing-text"></span>
+      </div>
+    </div>
+
+    <div id="reply-bar" class="hidden">
+      <div id="reply-bar-inner">
+        <span class="reply-bar-icon">↩</span>
+        <div class="reply-bar-text">
+          <span id="reply-bar-author" class="reply-bar-author"></span>
+          <span id="reply-bar-preview" class="reply-bar-preview"></span>
+        </div>
+        <button class="reply-bar-close" data-clear-reply title="Cancel reply">✕</button>
+      </div>
+    </div>
+
+    <div id="input-area">
+      <div id="input-box">
+        <textarea id="msg-input" placeholder="Select a room to chat" rows="1" maxlength="4000" disabled></textarea>
+        <div class="input-actions">
+          <button id="file-btn" data-file-share title="Share file" disabled>📎</button>
+          <button id="send-btn" data-send-message title="Send" disabled>➤</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ NETWORK PANEL ═══ -->
+  <div id="network-panel-drawer">
+    <div id="np-header">
+      <span>⬡</span> Network Topology
+      <button id="np-close-btn" data-close-netpanel>✕</button>
+    </div>
+    <div class="topology-canvas"><svg id="topo-svg" viewBox="0 0 256 180"></svg></div>
+    <div id="my-role-badge" class="role-badge alone"><span>◉</span> <span id="role-text">No room selected</span></div>
+    <div class="network-info">
+      <div class="net-stat"><span class="net-stat-label">Your ID</span><span class="net-stat-value" id="net-my-id">—</span></div>
+      <div class="net-stat"><span class="net-stat-label">Role</span><span class="net-stat-value" id="net-role">—</span></div>
+      <div class="net-stat"><span class="net-stat-label">Members</span><span class="net-stat-value" id="net-peers">0</span></div>
+      <div class="net-stat"><span class="net-stat-label">Known</span><span class="net-stat-value" id="net-known" title="">0</span></div>
+      <div class="net-stat"><span class="net-stat-label">Latency</span><span class="net-stat-value" id="net-latency">— ms</span></div>
+    </div>
+    <div class="cands-header">
+      <span class="cands-header-label">Children</span>
+      <button id="manage-cands-btn" data-manage-candidates>Rename</button>
+    </div>
+    <div class="candidates-list" id="candidates-list"></div>
+    <div id="connect-pane">
+      <input type="text" id="connect-peer-id" placeholder="Peer ID…">
+      <div id="connect-pane-inputs">
+        <input type="text" id="connect-room-name" placeholder="Room name…">
+        <input type="text" id="connect-room-id" placeholder="Room ID…">
+      </div>
+      <button data-manual-connect>Connect</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODALS (all are hidden initially, UI will show/hide via viewStore) ═══ -->
+
+<div class="modal-overlay hidden" id="setup-modal">
+  <div class="modal">
+    <h2>Welcome to GilgaMesh</h2>
+    <p>A decentralized peer-to-peer mesh network. Choose a display name to join.</p>
+    <div class="form-group">
+      <label class="form-label">Display Name</label>
+      <input type="text" class="form-input" id="setup-name" placeholder="e.g. Enkidu" maxlength="32" autofocus autocomplete="off">
+    </div>
+    <div class="btn-row"><button class="btn btn-primary" data-complete-setup>Enter Network</button></div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="settings-modal">
+  <div class="modal">
+    <h2>Settings</h2>
+    <p>Manage your identity.</p>
+    <div class="form-group"><label class="form-label">Display Name</label><input type="text" class="form-input" id="settings-name" maxlength="32"></div>
+    <div class="form-group"><label class="form-label">Your Peer ID</label><input type="text" class="form-input" id="settings-peer-id" readonly style="font-family:var(--mono);font-size:12px"></div>
+    <div class="btn-row" style="justify-content:space-between;align-items:center">
+      <button class="btn" data-clear-all-data style="background:var(--red-dim);color:var(--red);border:1px solid rgba(255,77,106,.3);padding:8px 14px;font-size:12px">🗑 Clear All Data</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button class="btn btn-primary"   data-save-settings>Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="create-room-modal">
+  <div class="modal">
+    <h2>Create Room</h2>
+    <p>Start a new peer-to-peer room. Share the invite link to bring others in.</p>
+    <div class="form-group"><label class="form-label">Room Name</label><input type="text" class="form-input" id="new-room-name" placeholder="e.g. Gaming Crew" maxlength="40" autocomplete="off"></div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" data-close-modal>Cancel</button>
+      <button class="btn btn-primary"   data-create-room-submit>Create Room</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="invite-modal">
+  <div class="modal">
+    <h2>Invite to Room</h2>
+    <p>Share this link to invite someone directly through your peer node.</p>
+    <div class="invite-info">
+      <div class="invite-row"><span class="invite-label">Room</span><span class="invite-value" id="invite-room-name"></span></div>
+      <div class="invite-row"><span class="invite-label">Room ID</span><span class="invite-value" id="invite-room-id" style="font-family:var(--mono)"></span></div>
+      <div class="invite-row"><span class="invite-label">Your Peer ID</span><span class="invite-value" id="invite-peer-id" style="font-family:var(--mono)"></span></div>
+    </div>
+    <div class="share-link-box"><span id="invite-link"></span><button data-copy-invite>⎘</button></div>
+    <div class="btn-row"><button class="btn btn-secondary" data-close-modal>Close</button></div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="add-channel-modal">
+  <div class="modal">
+    <h2>New Channel</h2>
+    <p>Create a topic channel in this room.</p>
+    <div class="form-group"><label class="form-label">Channel Name</label><input type="text" class="form-input" id="new-channel-name" placeholder="e.g. off-topic" maxlength="32"></div>
+    <div class="form-group"><label class="form-label">Description (optional)</label><input type="text" class="form-input" id="new-channel-desc" placeholder="What's this for?" maxlength="80"></div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" data-close-modal>Cancel</button>
+      <button class="btn btn-primary"   data-create-channel-submit>Create</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="file-share-modal">
+  <div class="modal">
+    <h2>Share File</h2>
+    <p>Creates a <strong>60-second</strong> direct P2P transfer link.</p>
+    <div id="file-share-content">
+      <div id="file-dropzone" style="border:2px dashed var(--border);border-radius:var(--radius);padding:26px;text-align:center;color:var(--text-muted);cursor:pointer">
+        <div style="font-size:26px;margin-bottom:7px">📁</div>
+        <div style="font-size:13px">Click or drag a file here</div>
+        <div style="font-size:11px;margin-top:3px">Any type · Any size</div>
+      </div>
+      <input type="file" id="file-modal-input" class="hidden">
+    </div>
+    <div id="file-share-link-area" class="hidden">
+      <div style="font-size:13px;font-weight:500;margin-bottom:7px" id="share-filename"></div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:9px">Expires in <span id="share-countdown" style="color:var(--amber);font-family:var(--mono);font-weight:600">60s</span></div>
+      <div class="share-link-box"><span id="share-link-text"></span><button data-copy-share-link>⎘</button></div>
+    </div>
+    <div class="btn-row"><button class="btn btn-secondary" data-close-modal>Close</button></div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="manage-candidates-modal">
+  <div class="modal" style="width:min(520px,100%)">
+    <h2>Rename Peers</h2>
+    <p>Give peers friendly display names. Changes are local only.</p>
+    <div id="manage-list"></div>
+    <div class="btn-row"><button class="btn btn-secondary" data-close-modal>Done</button></div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="leave-room-modal">
+  <div class="modal" style="max-width:380px">
+    <h2>Leave Room?</h2>
+    <p>You'll be removed from <strong id="leave-room-name"></strong>. Local history will be deleted.</p>
+    <div class="btn-row">
+      <button class="btn btn-secondary" data-close-modal>Cancel</button>
+      <button class="btn" data-confirm-leave-room style="background:var(--red);color:#fff">Leave Room</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="room-settings-modal">
+  <div class="modal" style="max-width:380px">
+    <h2 id="room-settings-modal-title">Room Settings</h2>
+    <p id="room-settings-modal-sub" style="color:var(--text-muted);font-size:13px;margin-bottom:14px"></p>
+    <div class="room-settings-actions">
+      <button class="room-action-btn" data-room-plugins>
+        <span class="ra-icon">🧩</span>
+        <span class="ra-text">
+          <span class="ra-label">Room Plugins</span>
+          <span class="ra-sub">Manage plugins active in this room</span>
+        </span>
+      </button>
+      <button class="room-action-btn" data-invite-from-settings>
+        <span class="ra-icon">🔗</span>
+        <span class="ra-text">
+          <span class="ra-label">Invite Members</span>
+          <span class="ra-sub">Share an invite link</span>
+        </span>
+      </button>
+      <button class="room-action-btn danger" data-leave-room-from-settings>
+        <span class="ra-icon">⬡</span>
+        <span class="ra-text">
+          <span class="ra-label">Leave Room</span>
+          <span class="ra-sub">Remove yourself from this room</span>
+        </span>
+      </button>
+    </div>
+    <div class="btn-row" style="margin-top:14px">
+      <button class="btn btn-secondary" data-close-modal>Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<!-- PeerJS library -->
+<script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
+
+<!-- Application entry point (compiled TypeScript) -->
+<script type="module" src="main.js"></script>
+</body>
+</html>

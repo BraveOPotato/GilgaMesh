@@ -1,0 +1,8 @@
+/* themes/light.css — Light theme overrides (applied via [data-theme="light"]) */
+/* Core token overrides are already in base.css [data-theme="light"] selector. */
+/* Add component-specific light-theme adjustments here as needed. */
+
+[data-theme="light"] .md-pre      { background: #f0f0f5; }
+[data-theme="light"] .msg-file-card { background: #f5f5f8; }
+[data-theme="light"] .room-card   { background: #ffffff; }
+[data-theme="light"] .voice-controls { background: rgba(61,220,132,0.06); }

@@ -1,0 +1,29 @@
+/* voice.css — Voice channel UI */
+
+/* ── Voice participants panel ───────────────────────────────────────────── */
+.voice-panel        { padding: var(--sp-3); border-top: 1px solid var(--border); }
+.voice-panel-title  { font-size: var(--text-xs); color: var(--text2); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: var(--sp-2); }
+.voice-participant  { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) 0; font-size: var(--text-sm); }
+.voice-muted-icon   { font-size: var(--text-xs); color: var(--red); }
+
+/* ── Voice controls bar ─────────────────────────────────────────────────── */
+.voice-controls     { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); background: rgba(61,220,132,0.08); border-top: 1px solid rgba(61,220,132,0.2); }
+.voice-status-text  { flex: 1; font-size: var(--text-xs); color: var(--green); font-weight: 500; }
+.voice-controls .icon-btn.active { color: var(--red); }
+
+/* ── Full-screen call overlay ───────────────────────────────────────────── */
+.call-overlay       { position: fixed; inset: 0; background: var(--bg); z-index: 500; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-6); }
+.call-overlay.hidden { display: none; }
+.call-peer-name     { font-size: 22px; font-weight: 700; }
+.call-status        { font-size: var(--text-sm); color: var(--text2); }
+.call-actions       { display: flex; gap: var(--sp-5); }
+.call-btn           { width: 56px; height: 56px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 22px; transition: all var(--transition); }
+.call-btn-accept    { background: var(--green); }
+.call-btn-decline,
+.call-btn-end       { background: var(--red); }
+.call-btn:hover     { filter: brightness(1.15); transform: scale(1.05); }
+
+/* Video */
+.call-video-container { display: flex; gap: var(--sp-4); }
+.call-video-self    { width: 160px; height: 120px; border-radius: var(--radius); background: var(--bg3); object-fit: cover; }
+.call-video-remote  { width: 360px; height: 270px; border-radius: var(--radius); background: var(--bg3); object-fit: cover; }

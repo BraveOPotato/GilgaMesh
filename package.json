@@ -1,0 +1,16 @@
+{
+  "name": "gilgamesh",
+  "type": "module",
+  "scripts": {
+    "build":    "tsc --noEmit",
+    "test":     "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0",
+    "@vitest/coverage-v8": "^1.6.0",
+    "jsdom": "^24.0.0"
+  }
+}
